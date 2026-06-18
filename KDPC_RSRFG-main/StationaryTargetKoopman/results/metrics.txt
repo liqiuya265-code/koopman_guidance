@@ -1,0 +1,20 @@
+Stationary-target Koopman guidance validation
+max_bilinear_consistency_error=5.172139297332e-12
+one_step_nrmse= 4.03379409e-05 1.72472288e-05 4.39704958e-09
+multi_step_nrmse= 1.51092196e-02 6.42087667e-03 1.44267956e-08
+nominal_captured=1
+nominal_final_range_m=9.40083596
+nominal_capture_time_s=21.30000000
+nominal_final_heading_deg=-1.67307519
+nominal_max_acceleration_mps2=60.00000000
+nominal_qp_failures=0
+nominal_mean_xi=0.04101499
+nominal_max_prediction_error=0.03760462
+stress_captured=1
+stress_final_range_m=22.39110554
+stress_capture_time_s=21.90000000
+stress_final_heading_deg=-1.65286021
+stress_max_acceleration_mps2=60.00000000
+stress_qp_failures=0
+stress_mean_xi=0.09168079
+stress_max_prediction_error=0.03633577

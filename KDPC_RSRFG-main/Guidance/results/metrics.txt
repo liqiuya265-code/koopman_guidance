@@ -1,0 +1,12 @@
+Two-dimensional guidance KDPC validation
+one_step_nrmse_scaled_y=0.00000476
+one_step_nrmse_gamma=0.00000001
+direct_multistep_nrmse_scaled_y=0.00209081
+direct_multistep_nrmse_gamma=0.00000003
+terminal_lateral_error_m=5.40658146
+terminal_angle_error_deg=0.16080911
+max_acceleration_mps2=60.00000000
+max_angle_constraint_violation_rad=0.00000000
+qp_failures=0
+mean_xi=0.18345006
+max_prediction_error=0.01867950

@@ -1,0 +1,11 @@
+Conventional LOS guidance KDPC validation
+capture_achieved=1
+final_range_m=297.29803945
+final_los_angle_deg=12.97881936
+final_los_rate_rads=0.0010395565
+max_command_mps2=55.00000000
+qp_failures=0
+mean_xi=0.00860149
+max_prediction_error=0.77491853
+one_step_nrmse= 0.00000001 0.00003777 0.00000055 0.00038736 0.00000000
+multi_step_nrmse= 0.00001897 0.00370667 0.00044396 0.02196606 0.00000000
