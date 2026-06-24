@@ -1,0 +1,3 @@
+"angle_deg","nominal_ok","nominal_time_s","nominal_miss_m","nominal_angle_error_deg","nominal_max_a","stress_ok","stress_time_s","stress_miss_m","stress_angle_error_deg","stress_max_a","nominal_qp_failures","stress_qp_failures"
+"30","1","22.00000000","20.17084669","-0.15038616","93.60000000","1","22.60000000","19.04700714","-0.16604608","93.60000000","0","0"
+"45","1","23.10000000","16.02564843","-0.50235253","93.60000000","1","23.60000000","11.95454170","-0.72737070","93.60000000","0","0"
