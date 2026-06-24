@@ -11,10 +11,15 @@ if ~exist(resultsDir,'dir'), mkdir(resultsDir); end
 p.Vnom=300;               % [m/s]
 p.Vactual=0.97*p.Vnom;   % stress-test speed [m/s]
 p.Rscale=6000;            % position scale [m]
-p.amax=60;                % acceleration limit [m/s^2]
+p.amax=100;               % acceleration limit [m/s^2]
 p.Ts=0.1;                 % sample time [s]
 p.inputEffectiveness=0.94;
 p.captureRadius=25;       % Cartesian coordinates permit a small capture set
+p.impactTime=21.7;        % prescribed impact time [s]
+p.impactGamma=deg2rad(-2);% prescribed impact angle / heading [rad]
+p.impactTimeTolerance=p.Ts/2;
+p.impactAngleTolerance=deg2rad(3);
+p.postImpactWindow=2.0;   % keep simulating briefly after scheduled impact
 
 N=35;                    % 3.5 s direct prediction horizon
 nSteps=90;
@@ -29,11 +34,16 @@ test=generate_data(nTestTraj,nSteps,N,p,1000);
 %% Lift and identify one-step/direct multi-step predictors
 nz=size(train.Z0,1);
 nx=3;
-C=[zeros(3,1),eye(3),zeros(3,nz-4)]; % z=[1;x;nonlinear features]
+C=[zeros(3,1),eye(3),zeros(3,nz-4)]; % z=[1;tau/tf;y/Rscale;theta;nonlinear features]
 
 AB=ridge_regression(train.Zplus,[train.Zminus;train.Uone],ridge);
 A=AB(:,1:nz);
 B=AB(:,nz+1);
+Bilinear=ridge_regression(train.Zplus, ...
+    [train.Zminus;train.Uone;train.Zminus.*train.Uone],ridge);
+Ablin=Bilinear(:,1:nz);
+B0=Bilinear(:,nz+1);
+B1=Bilinear(:,nz+2:end);
 Theta=ridge_regression(train.Zfuture,[train.Z0;train.Useq],ridge);
 ThetaZ=Theta(:,1:nz);
 ThetaU=Theta(:,nz+1:end);
@@ -41,11 +51,16 @@ Cbar=kron(eye(N),C);
 
 oneHat=AB*[test.Zminus;test.Uone];
 oneNRMSE=normalized_rmse(C*test.Zplus,C*oneHat);
+oneResidual95=prctile(abs((C*test.Zplus-C*oneHat).'),95).';
 multiHat=Theta*[test.Z0;test.Useq];
 multiTruth=Cbar*test.Zfuture;
 multiPrediction=Cbar*multiHat;
 multiNRMSE=normalized_rmse(reshape(multiTruth,nx,[]), ...
     reshape(multiPrediction,nx,[]));
+bilinearHat=bilinear_predict_dataset(test.Z0,test.Useq,Ablin,B0,B1,N,nz);
+bilinearPrediction=Cbar*bilinearHat;
+bilinearNRMSE=normalized_rmse(reshape(multiTruth,nx,[]), ...
+    reshape(bilinearPrediction,nx,[]));
 
 %% Exact bilinear lifting consistency check
 bilinearErrors=zeros(1,300);
@@ -63,24 +78,43 @@ end
 maxBilinearError=max(bilinearErrors);
 
 fprintf('Exact bilinear-lift RK4 consistency error: %.3e\n',maxBilinearError);
-fprintf('One-step EDMD NRMSE [rx,ry,gamma]:\n'); disp(oneNRMSE.');
-fprintf('Direct %d-step EDMD NRMSE [rx,ry,gamma]:\n',N); disp(multiNRMSE.');
+fprintf('One-step EDMD NRMSE [tau,y,theta]:\n'); disp(oneNRMSE.');
+fprintf('Direct %d-step EDMD NRMSE [tau,y,theta]:\n',N); disp(multiNRMSE.');
+fprintf('Bilinear rolling %d-step NRMSE [tau,y,theta]:\n',N); disp(bilinearNRMSE.');
+fprintf('95%% one-step residual [tau/tf,y/Rs,theta]:\n'); disp(oneResidual95.');
 
 %% KDPC controller
-Qx=diag([55,75,1.5]);
-Qterminal=diag([600,800,4]);
-Qz=C'*Qx*C+1e-7*eye(nz);
-Pz=C'*Qterminal*C+1e-6*eye(nz);
+Qx=diag([600,900,35]);
+Qterminal=diag([70000,90000,1200]);
+Qxbar=kron(eye(N),Qx);
+Qxbar(end-nx+1:end,end-nx+1:end)=Qterminal;
 
 ctrl.N=N; ctrl.nz=nz; ctrl.nx=nx;
 ctrl.C=C; ctrl.Cbar=Cbar;
 ctrl.ThetaZ=ThetaZ; ctrl.ThetaU=ThetaU;
-ctrl.Qzbar=kron(eye(N),Qz);
-ctrl.Qzbar(end-nz+1:end,end-nz+1:end)=Pz;
+ctrl.Ablin=Ablin; ctrl.B0=B0; ctrl.B1=B1;
+ctrl.seqIterations=3;
+ctrl.Qxbar=Qxbar;
 ctrl.Rbar=0.06*eye(N);
+ctrl.Rd=1.5;
 ctrl.Q0=0.02*eye(nz);
 ctrl.lambda=8e4;
 ctrl.gammaMax=deg2rad(85);
+ctrl.Ts=p.Ts;
+ctrl.Vref=p.Vnom;
+ctrl.Rscale=p.Rscale;
+ctrl.impactTime=p.impactTime;
+ctrl.impactGamma=p.impactGamma;
+ctrl.captureRadius=p.captureRadius;
+ctrl.impactTimeTolerance=p.impactTimeTolerance;
+ctrl.impactAngleTolerance=p.impactAngleTolerance;
+ctrl.terminalTol=[p.captureRadius/(p.Vnom*p.impactTime); ...
+    p.captureRadius/p.Rscale; p.impactAngleTolerance];
+ctrl.residualBound95=oneResidual95;
+ctrl.terminalTightening=min(0.5*ctrl.terminalTol,0.2*oneResidual95);
+ctrl.terminalTolTight=max(0.25*ctrl.terminalTol, ...
+    ctrl.terminalTol-ctrl.terminalTightening);
+ctrl.slackPenalty=diag([2e6,2e6,5e5]);
 ctrl.options=optimoptions('quadprog','Display','off', ...
     'Algorithm','interior-point-convex');
 
@@ -88,24 +122,32 @@ initial=[6000/p.Rscale;1500/p.Rscale;deg2rad(25)];
 nominal=run_closed_loop(initial,p,ctrl,false);
 stress=run_closed_loop(initial,p,ctrl,true);
 
-fprintf('Nominal: captured=%d, miss=%.3f m, time=%.2f s, QP failures=%d\n', ...
-    nominal.captured,nominal.finalRange_m,nominal.time_s(end),nominal.qpFailures);
-fprintf('Stress:  captured=%d, miss=%.3f m, time=%.2f s, QP failures=%d\n', ...
-    stress.captured,stress.finalRange_m,stress.time_s(end),stress.qpFailures);
+fprintf('Nominal: impactOK=%d, scheduled miss=%.3f m, angle error=%.2f deg, QP failures=%d\n', ...
+    nominal.impactSatisfied,nominal.impactRange_m, ...
+    nominal.impactHeadingError_deg,nominal.qpFailures);
+fprintf('Stress:  impactOK=%d, scheduled miss=%.3f m, angle error=%.2f deg, QP failures=%d\n', ...
+    stress.impactSatisfied,stress.impactRange_m, ...
+    stress.impactHeadingError_deg,stress.qpFailures);
 
 %% Prediction figure
 sample=min(100,size(test.Z0,2));
 zt=reshape(test.Zfuture(:,sample),nz,N);
-zh=reshape(multiHat(:,sample),nz,N);
+zhLin=reshape(multiHat(:,sample),nz,N);
+zhBil=reshape(bilinearHat(:,sample),nz,N);
 fig1=figure('Color','w','Position',[100 100 900 680]);
-subplot(3,1,1); plot(1:N,p.Rscale*C(1,:)*zt,'k','LineWidth',1.6); hold on;
-plot(1:N,p.Rscale*C(1,:)*zh,'b--','LineWidth',1.6); ylabel('r_x [m]'); grid on;
-legend('nonlinear','linear EDMD');
+subplot(3,1,1); plot(1:N,p.impactTime*C(1,:)*zt,'k','LineWidth',1.6); hold on;
+plot(1:N,p.impactTime*C(1,:)*zhLin,'b--','LineWidth',1.4);
+plot(1:N,p.impactTime*C(1,:)*zhBil,'r-.','LineWidth',1.4);
+ylabel('tau [s]'); grid on;
+legend('nonlinear','linear multi-step','bilinear rolling');
 subplot(3,1,2); plot(1:N,p.Rscale*C(2,:)*zt,'k','LineWidth',1.6); hold on;
-plot(1:N,p.Rscale*C(2,:)*zh,'b--','LineWidth',1.6); ylabel('r_y [m]'); grid on;
+plot(1:N,p.Rscale*C(2,:)*zhLin,'b--','LineWidth',1.4);
+plot(1:N,p.Rscale*C(2,:)*zhBil,'r-.','LineWidth',1.4);
+ylabel('y [m]'); grid on;
 subplot(3,1,3); plot(1:N,rad2deg(C(3,:)*zt),'k','LineWidth',1.6); hold on;
-plot(1:N,rad2deg(C(3,:)*zh),'b--','LineWidth',1.6);
-xlabel('prediction step'); ylabel('gamma [deg]'); grid on;
+plot(1:N,rad2deg(C(3,:)*zhLin),'b--','LineWidth',1.4);
+plot(1:N,rad2deg(C(3,:)*zhBil),'r-.','LineWidth',1.4);
+xlabel('prediction step'); ylabel('theta [deg]'); grid on;
 exportgraphics(fig1,fullfile(resultsDir,'prediction_validation.png'),'Resolution',180);
 
 %% Closed-loop figures
@@ -113,13 +155,16 @@ fig2=figure('Color','w','Position',[100 80 980 820]);
 subplot(4,1,1); plot(p.Rscale*nominal.x(1,:),p.Rscale*nominal.x(2,:), ...
     'b','LineWidth',1.7); hold on;
 plot(p.Rscale*stress.x(1,:),p.Rscale*stress.x(2,:),'r--','LineWidth',1.5);
+refLine=impact_reference_path(p);
+plot(refLine(1,:),refLine(2,:),'k:','LineWidth',1.1);
 plot(0,0,'ko','MarkerFaceColor','k'); axis equal; grid on;
-xlabel('r_x [m]'); ylabel('r_y [m]'); legend('nominal','stress','target');
+xlabel('r_x [m]'); ylabel('r_y [m]'); legend('nominal','stress','time-angle reference','target');
 subplot(4,1,2); plot(nominal.time_s,nominal.range_m,'b','LineWidth',1.6); hold on;
 plot(stress.time_s,stress.range_m,'r--','LineWidth',1.5);
-yline(p.captureRadius,'k:'); ylabel('range [m]'); grid on;
+yline(p.captureRadius,'k:'); xline(p.impactTime,'k-.'); ylabel('range [m]'); grid on;
 subplot(4,1,3); plot(nominal.time_s,rad2deg(nominal.x(3,:)),'b','LineWidth',1.5); hold on;
 plot(stress.time_s,rad2deg(stress.x(3,:)),'r--','LineWidth',1.4);
+yline(rad2deg(p.impactGamma),'k:'); xline(p.impactTime,'k-.');
 ylabel('gamma [deg]'); grid on;
 subplot(4,1,4); stairs(nominal.time_s(1:end-1),p.amax*nominal.u,'b','LineWidth',1.4); hold on;
 stairs(stress.time_s(1:end-1),p.amax*stress.u,'r--','LineWidth',1.3);
@@ -140,16 +185,26 @@ exportgraphics(fig3,fullfile(resultsDir,'interpolation_error.png'),'Resolution',
 metrics.maxBilinearConsistencyError=maxBilinearError;
 metrics.oneStepNRMSE=oneNRMSE;
 metrics.multiStepNRMSE=multiNRMSE;
+metrics.bilinearRollingNRMSE=bilinearNRMSE;
+metrics.oneStepResidual95=oneResidual95;
+metrics.terminalTol=ctrl.terminalTol;
+metrics.terminalTightening=ctrl.terminalTightening;
+metrics.terminalTolTight=ctrl.terminalTolTight;
 metrics.nominal=nominal.metrics;
 metrics.stress=stress.metrics;
 save(fullfile(resultsDir,'stationary_target_results.mat'), ...
-    'A','B','C','Theta','metrics','nominal','stress','p','ctrl');
+    'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
 
 fid=fopen(fullfile(resultsDir,'metrics.txt'),'w');
 fprintf(fid,'Stationary-target Koopman guidance validation\n');
 fprintf(fid,'max_bilinear_consistency_error=%.12e\n',maxBilinearError);
 fprintf(fid,'one_step_nrmse='); fprintf(fid,' %.8e',oneNRMSE); fprintf(fid,'\n');
 fprintf(fid,'multi_step_nrmse='); fprintf(fid,' %.8e',multiNRMSE); fprintf(fid,'\n');
+fprintf(fid,'bilinear_rolling_nrmse='); fprintf(fid,' %.8e',bilinearNRMSE); fprintf(fid,'\n');
+fprintf(fid,'one_step_residual95='); fprintf(fid,' %.8e',oneResidual95); fprintf(fid,'\n');
+fprintf(fid,'terminal_tol='); fprintf(fid,' %.8e',ctrl.terminalTol); fprintf(fid,'\n');
+fprintf(fid,'terminal_tightening='); fprintf(fid,' %.8e',ctrl.terminalTightening); fprintf(fid,'\n');
+fprintf(fid,'terminal_tol_tight='); fprintf(fid,' %.8e',ctrl.terminalTolTight); fprintf(fid,'\n');
 write_case(fid,'nominal',nominal.metrics);
 write_case(fid,'stress',stress.metrics);
 fclose(fid);
@@ -158,7 +213,7 @@ fprintf('Results saved in %s\n',resultsDir);
 %% Local functions
 function data=generate_data(nTraj,nSteps,N,p,offset)
     rng(97+offset,'twister');
-    nz=numel(lift_state([0;0;0]));
+    nz=numel(lift_state([0;0;0],p));
     data.Zminus=zeros(nz,nTraj*nSteps);
     data.Zplus=zeros(nz,nTraj*nSteps);
     data.Uone=zeros(1,nTraj*nSteps);
@@ -178,25 +233,26 @@ function data=generate_data(nTraj,nSteps,N,p,offset)
         for k=1:nSteps
             state(:,k+1)=plant_step(state(:,k),input(k),p,false);
             s=s+1;
-            data.Zminus(:,s)=lift_state(state(:,k));
-            data.Zplus(:,s)=lift_state(state(:,k+1));
+            data.Zminus(:,s)=lift_state(state(:,k),p);
+            data.Zplus(:,s)=lift_state(state(:,k+1),p);
             data.Uone(s)=input(k);
         end
         for k=1:nSteps-N
             w=w+1;
-            data.Z0(:,w)=lift_state(state(:,k));
+            data.Z0(:,w)=lift_state(state(:,k),p);
             data.Useq(:,w)=input(k:k+N-1).';
             future=zeros(nz,N);
-            for h=1:N, future(:,h)=lift_state(state(:,k+h)); end
+            for h=1:N, future(:,h)=lift_state(state(:,k+h),p); end
             data.Zfuture(:,w)=future(:);
         end
     end
 end
 
-function z=lift_state(x)
-    rx=x(1); ry=x(2); g=x(3);
-    z=[1;rx;ry;g;cos(g);sin(g);rx*cos(g);rx*sin(g); ...
-        ry*cos(g);ry*sin(g);g^2];
+function z=lift_state(x,p)
+    xt=time_to_go_state(x,p);
+    tau=xt(1); y=xt(2); th=xt(3);
+    z=[1;tau;y;th;cos(th);sin(th);tau*cos(th);tau*sin(th); ...
+        y*cos(th);y*sin(th);th^2];
 end
 
 function z=exact_bilinear_lift(x)
@@ -222,57 +278,235 @@ function zn=bilinear_lift_step(z,u,p)
     zn=z+p.Ts*(k1+2*k2+2*k3+k4)/6;
 end
 
-function out=run_closed_loop(initial,p,c,stress)
-    Kmax=round(32/p.Ts);
-    x=zeros(3,Kmax+1); x(:,1)=initial;
-    u=zeros(1,Kmax); xi=zeros(1,Kmax); err=zeros(1,Kmax); flags=zeros(1,Kmax);
-    zPrevious=lift_state(x(:,1)); last=Kmax+1; captured=false;
-    for k=1:Kmax
-        zMeasured=lift_state(x(:,k));
-        err(k)=norm(zPrevious-zMeasured);
-        [useq,xi(k),Zpred,flags(k)]=kdpc(zMeasured,zPrevious,c);
-        u(k)=useq(1); zPrevious=Zpred(1:c.nz);
-        x(:,k+1)=plant_step(x(:,k),u(k),p,stress);
-        range=p.Rscale*hypot(x(1,k+1),x(2,k+1));
-        if range<=p.captureRadius
-            last=k+1; captured=true; break;
+function Zfuture=bilinear_predict_dataset(Z0,Useq,A,B0,B1,N,nz)
+    nCases=size(Z0,2);
+    Zfuture=zeros(nz*N,nCases);
+    for cidx=1:nCases
+        z=Z0(:,cidx);
+        for h=1:N
+            u=Useq(h,cidx);
+            z=A*z+B0*u+u*(B1*z);
+            Zfuture((h-1)*nz+(1:nz),cidx)=z;
         end
     end
-    out.x=x(:,1:last); out.u=u(1:last-1); out.xi=xi(1:last-1);
-    out.predictionError=err(1:last-1); out.exitflags=flags(1:last-1);
-    out.time_s=(0:last-1)*p.Ts;
+end
+
+function out=run_closed_loop(initial,p,c,stress)
+    Kmax=round((p.impactTime+p.postImpactWindow)/p.Ts);
+    x=zeros(3,Kmax+1); x(:,1)=initial;
+    u=zeros(1,Kmax); xi=zeros(1,Kmax); err=zeros(1,Kmax); flags=zeros(1,Kmax);
+    terminalSlack=zeros(3,Kmax);
+    zPrevious=lift_state(x(:,1),p);
+    uPrev=0;
+    for k=1:Kmax
+        zMeasured=lift_state(x(:,k),p);
+        err(k)=norm(zPrevious-zMeasured);
+        [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
+            kdpc(zMeasured,zPrevious,c,k,uPrev);
+        u(k)=useq(1); uPrev=u(k); zPrevious=Zpred(1:c.nz);
+        x(:,k+1)=plant_step(x(:,k),u(k),p,stress);
+    end
+    out.x=x; out.u=u; out.xi=xi;
+    out.predictionError=err; out.exitflags=flags;
+    out.terminalSlack=terminalSlack;
+    out.time_s=(0:Kmax)*p.Ts;
     out.range_m=p.Rscale*hypot(out.x(1,:),out.x(2,:));
-    out.captured=captured; out.finalRange_m=out.range_m(end);
+    [~,impactIndex]=min(abs(out.time_s-p.impactTime));
+    out.impactIndex=impactIndex;
+    out.impactTime_s=out.time_s(impactIndex);
+    out.impactTimeError_s=out.impactTime_s-p.impactTime;
+    out.impactRange_m=out.range_m(impactIndex);
+    out.impactHeading_deg=rad2deg(out.x(3,impactIndex));
+    out.impactHeadingError_deg=rad2deg(wrap_angle( ...
+        out.x(3,impactIndex)-p.impactGamma));
+    out.impactSatisfied= ...
+        abs(out.impactTimeError_s)<=p.impactTimeTolerance && ...
+        out.impactRange_m<=p.captureRadius && ...
+        abs(deg2rad(out.impactHeadingError_deg))<=p.impactAngleTolerance;
+    out.captured=out.impactSatisfied;
+    out.finalRange_m=out.range_m(end);
     out.qpFailures=sum(out.exitflags<=0);
-    out.metrics.captured=captured;
+    out.metrics.impactSatisfied=out.impactSatisfied;
+    out.metrics.captured=out.impactSatisfied;
     out.metrics.finalRange_m=out.finalRange_m;
-    out.metrics.captureTime_s=out.time_s(end);
+    out.metrics.impactTime_s=out.impactTime_s;
+    out.metrics.impactTimeError_s=out.impactTimeError_s;
+    out.metrics.impactRange_m=out.impactRange_m;
+    out.metrics.impactHeading_deg=out.impactHeading_deg;
+    out.metrics.impactHeadingError_deg=out.impactHeadingError_deg;
     out.metrics.finalHeading_deg=rad2deg(out.x(3,end));
     out.metrics.maxAcceleration_mps2=max(abs(out.u))*p.amax;
     out.metrics.qpFailures=out.qpFailures;
     out.metrics.meanXi=mean(out.xi);
     out.metrics.maxPredictionError=max(out.predictionError);
+    out.metrics.maxTerminalSlack=max(out.terminalSlack,[],2);
 end
 
-function [U,xi,Zpred,exitflag]=kdpc(zMeasured,zPrevious,c)
+function [U,xi,Zpred,exitflag,terminalSlack]=kdpc(zMeasured,zPrevious,c,k,uPrev)
     delta=zPrevious-zMeasured;
-    offsetZ=c.ThetaZ*zMeasured;
-    mapZ=[c.ThetaU,c.ThetaZ*delta];
+    U=zeros(c.N,1); xi=0; terminalSlack=zeros(3,1); exitflag=1;
+    for iter=1:c.seqIterations
+        z0=zMeasured+xi*delta;
+        zbar=bilinear_rollout_states(z0,U,c);
+        [offsetZ,mapZ]=ltv_prediction_maps(zMeasured,delta,zbar,c);
+        [Unew,xinew,slacknew,flag]=solve_kdpc_qp(offsetZ,mapZ, ...
+            zMeasured,delta,c,k,uPrev);
+        if flag<=0
+            exitflag=flag;
+            break;
+        end
+        U=0.6*Unew+0.4*U;
+        xi=xinew;
+        terminalSlack=slacknew;
+        exitflag=flag;
+    end
+    z0=zMeasured+xi*delta;
+    Zpred=bilinear_rollout_stack(z0,U,c);
+end
+
+function zbar=bilinear_rollout_states(z0,U,c)
+    zbar=zeros(c.nz,c.N);
+    z=z0;
+    for i=1:c.N
+        zbar(:,i)=z;
+        z=c.Ablin*z+c.B0*U(i)+U(i)*(c.B1*z);
+    end
+end
+
+function Z=bilinear_rollout_stack(z0,U,c)
+    Z=zeros(c.nz*c.N,1);
+    z=z0;
+    for i=1:c.N
+        z=c.Ablin*z+c.B0*U(i)+U(i)*(c.B1*z);
+        Z((i-1)*c.nz+(1:c.nz))=z;
+    end
+end
+
+function [offsetZ,mapZ]=ltv_prediction_maps(zMeasured,delta,zbar,c)
+    offsetZ=zeros(c.nz*c.N,1);
+    mapZ=zeros(c.nz*c.N,c.N+1);
+    zOff=zMeasured;
+    uMap=zeros(c.nz,c.N);
+    xiMap=delta;
+    for i=1:c.N
+        Beff=c.B0+c.B1*zbar(:,i);
+        zOffNext=c.Ablin*zOff;
+        uMapNext=c.Ablin*uMap;
+        xiMapNext=c.Ablin*xiMap;
+        uMapNext(:,i)=uMapNext(:,i)+Beff;
+        rows=(i-1)*c.nz+(1:c.nz);
+        offsetZ(rows)=zOffNext;
+        mapZ(rows,:)=[uMapNext,xiMapNext];
+        zOff=zOffNext;
+        uMap=uMapNext;
+        xiMap=xiMapNext;
+    end
+end
+
+function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
+    zMeasured,delta,c,k,uPrev)
     offsetX=c.Cbar*offsetZ; mapX=c.Cbar*mapZ;
-    H=2*(mapZ'*c.Qzbar*mapZ); f=2*(mapZ'*c.Qzbar*offsetZ);
+    xRef=impact_reference_stack(k,c);
+    nBase=c.N+1; nSlack=3; nVar=nBase+nSlack;
+    H=zeros(nVar); f=zeros(nVar,1);
+    H(1:nBase,1:nBase)=2*(mapX'*c.Qxbar*mapX);
+    f(1:nBase)=2*(mapX'*c.Qxbar*(offsetX-xRef));
     H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*c.Rbar;
-    H(end,end)=H(end,end)+2*(delta'*c.Q0*delta+c.lambda*(delta'*delta));
-    f(end)=f(end)+2*delta'*c.Q0*zMeasured;
-    H=0.5*(H+H')+1e-9*eye(c.N+1);
-    gammaSel=kron(eye(c.N),[0 0 1]);
-    Aineq=[gammaSel*mapX;-gammaSel*mapX];
-    bineq=[c.gammaMax*ones(c.N,1)-gammaSel*offsetX; ...
-        c.gammaMax*ones(c.N,1)+gammaSel*offsetX];
-    lb=[-ones(c.N,1);0]; ub=[ones(c.N,1);1];
+    [Hd,fd]=delta_u_penalty(c.N,c.Rd,uPrev);
+    H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*Hd;
+    f(1:c.N)=f(1:c.N)+2*fd;
+    H(nBase,nBase)=H(nBase,nBase)+2*(delta'*c.Q0*delta+c.lambda*(delta'*delta));
+    f(nBase)=f(nBase)+2*delta'*c.Q0*zMeasured;
+    H(nBase+1:end,nBase+1:end)=H(nBase+1:end,nBase+1:end)+ ...
+        2*c.slackPenalty;
+    H=0.5*(H+H')+1e-9*eye(nVar);
+    thetaSel=kron(eye(c.N),[0 0 1]);
+    Aineq=[thetaSel*mapX,zeros(c.N,nSlack); ...
+        -thetaSel*mapX,zeros(c.N,nSlack)];
+    bineq=[(c.gammaMax-c.impactGamma)*ones(c.N,1)-thetaSel*offsetX; ...
+        (c.gammaMax+c.impactGamma)*ones(c.N,1)+thetaSel*offsetX];
+    currentTime=(k-1)*c.Ts;
+    hImpact=round((c.impactTime-currentTime)/c.Ts);
+    if hImpact>=1 && hImpact<=c.N
+        idx=(hImpact-1)*c.nx+(1:c.nx);
+        tol=c.terminalTolTight;
+        slackCols=[1 0 0;0 1 0;0 0 1];
+        for j=1:c.nx
+            row=zeros(1,nVar);
+            row(1:nBase)=mapX(idx(j),:);
+            row(nBase+1:end)=-slackCols(j,:);
+            Aineq=[Aineq;row];
+            bineq=[bineq;tol(j)+xRef(idx(j))-offsetX(idx(j))];
+            row=zeros(1,nVar);
+            row(1:nBase)=-mapX(idx(j),:);
+            row(nBase+1:end)=-slackCols(j,:);
+            Aineq=[Aineq;row];
+            bineq=[bineq;tol(j)-xRef(idx(j))+offsetX(idx(j))];
+        end
+        yRow=mapX(idx(2),:)/tol(2);
+        thRow=mapX(idx(3),:)/tol(3);
+        yOff=(offsetX(idx(2))-xRef(idx(2)))/tol(2);
+        thOff=(offsetX(idx(3))-xRef(idx(3)))/tol(3);
+        for sy=[-1,1]
+            for st=[-1,1]
+                row=zeros(1,nVar);
+                row(1:nBase)=sy*yRow+st*thRow;
+                row(nBase+2)=-1/tol(2);
+                row(nBase+3)=-1/tol(3);
+                Aineq=[Aineq;row];
+                bineq=[bineq;1-sy*yOff-st*thOff];
+            end
+        end
+    end
+    lb=[-ones(c.N,1);0;zeros(nSlack,1)];
+    ub=[ones(c.N,1);1;inf(nSlack,1)];
     [sol,~,exitflag]=quadprog(H,f,Aineq,bineq,[],[],lb,ub,[],c.options);
-    if exitflag<=0 || isempty(sol), sol=[zeros(c.N,1);0]; end
-    U=sol(1:c.N); xi=sol(end);
-    Zpred=c.ThetaZ*(zMeasured+xi*delta)+c.ThetaU*U;
+    if exitflag<=0 || isempty(sol), sol=[zeros(c.N,1);0;zeros(nSlack,1)]; end
+    U=sol(1:c.N);
+    xi=sol(nBase);
+    terminalSlack=sol(nBase+1:end);
+end
+
+function [Hdu,fdu]=delta_u_penalty(N,Rd,uPrev)
+    D=eye(N);
+    for i=2:N
+        D(i,i-1)=-1;
+    end
+    d=zeros(N,1);
+    d(1)=-uPrev;
+    Hdu=Rd*(D'*D);
+    fdu=Rd*(D'*d);
+end
+
+function xRef=impact_reference_stack(k,c)
+    xRef=zeros(c.nx*c.N,1);
+    for h=1:c.N
+        t=(k-1+h)*c.Ts;
+        tgo=max(c.impactTime-t,0);
+        idx=(h-1)*c.nx+(1:c.nx);
+        xRef(idx)=[tgo/c.impactTime;0;0];
+    end
+end
+
+function ref=impact_reference_path(p)
+    t=linspace(0,p.impactTime,120);
+    ef=[cos(p.impactGamma);sin(p.impactGamma)];
+    ref=p.Vnom*(p.impactTime-t).*ef;
+end
+
+function a=wrap_angle(a)
+    a=mod(a+pi,2*pi)-pi;
+end
+
+function xt=time_to_go_state(x,p)
+    ef=[cos(p.impactGamma);sin(p.impactGamma)];
+    nf=[-sin(p.impactGamma);cos(p.impactGamma)];
+    r=p.Rscale*x(1:2);
+    s=ef.'*r;
+    y=nf.'*r;
+    tau=s/p.Vnom;
+    theta=wrap_angle(x(3)-p.impactGamma);
+    xt=[tau/p.impactTime;y/p.Rscale;theta];
 end
 
 function W=ridge_regression(Y,X,lambda)
@@ -284,13 +518,20 @@ function v=normalized_rmse(truth,prediction)
 end
 
 function write_case(fid,name,m)
+    fprintf(fid,'%s_impact_satisfied=%d\n',name,m.impactSatisfied);
     fprintf(fid,'%s_captured=%d\n',name,m.captured);
     fprintf(fid,'%s_final_range_m=%.8f\n',name,m.finalRange_m);
-    fprintf(fid,'%s_capture_time_s=%.8f\n',name,m.captureTime_s);
+    fprintf(fid,'%s_impact_time_s=%.8f\n',name,m.impactTime_s);
+    fprintf(fid,'%s_impact_time_error_s=%.8f\n',name,m.impactTimeError_s);
+    fprintf(fid,'%s_impact_range_m=%.8f\n',name,m.impactRange_m);
+    fprintf(fid,'%s_impact_heading_deg=%.8f\n',name,m.impactHeading_deg);
+    fprintf(fid,'%s_impact_heading_error_deg=%.8f\n',name,m.impactHeadingError_deg);
     fprintf(fid,'%s_final_heading_deg=%.8f\n',name,m.finalHeading_deg);
     fprintf(fid,'%s_max_acceleration_mps2=%.8f\n',name,m.maxAcceleration_mps2);
     fprintf(fid,'%s_qp_failures=%d\n',name,m.qpFailures);
     fprintf(fid,'%s_mean_xi=%.8f\n',name,m.meanXi);
     fprintf(fid,'%s_max_prediction_error=%.8f\n',name,m.maxPredictionError);
+    fprintf(fid,'%s_max_terminal_slack=',name);
+    fprintf(fid,' %.8e',m.maxTerminalSlack);
+    fprintf(fid,'\n');
 end
-
