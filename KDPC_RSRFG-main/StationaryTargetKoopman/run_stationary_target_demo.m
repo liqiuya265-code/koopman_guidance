@@ -1,6 +1,9 @@
 %% Stationary-target Koopman guidance: theory-consistent numerical validation
-clearvars -except impactTimeOverride impactGammaDegOverride angleOnlyModeOverride ...
-    nStepsOverride nTrainTrajOverride nTestTrajOverride;
+if ~exist('skipClearOverride','var') || ~skipClearOverride
+    clearvars -except impactTimeOverride impactGammaDegOverride ...
+        angleOnlyModeOverride initialGammaDegOverride resultSuffixOverride ...
+        nStepsOverride nTrainTrajOverride nTestTrajOverride;
+end
 clc; close all;
 rng(97,'twister');
 set(groot,'defaultFigureVisible','off');
@@ -27,6 +30,8 @@ if exist('impactTimeOverride','var'), p.impactTime=impactTimeOverride; end
 if exist('impactGammaDegOverride','var'), p.impactGamma=deg2rad(impactGammaDegOverride); end
 angleOnlyMode=false;
 if exist('angleOnlyModeOverride','var'), angleOnlyMode=angleOnlyModeOverride; end
+resultSuffix='';
+if exist('resultSuffixOverride','var'), resultSuffix=resultSuffixOverride; end
 
 N=35;                    % 3.5 s direct prediction horizon
 nSteps=90;
@@ -148,7 +153,9 @@ ctrl.slackPenalty=diag([2e6,2e6,5e5]);
 ctrl.options=optimoptions('quadprog','Display','off', ...
     'Algorithm','interior-point-convex');
 
-initial=[6000/p.Rscale;1500/p.Rscale;deg2rad(25);0];
+initialGammaDeg=25;
+if exist('initialGammaDegOverride','var'), initialGammaDeg=initialGammaDegOverride; end
+initial=[6000/p.Rscale;1500/p.Rscale;deg2rad(initialGammaDeg);0];
 nominal=run_closed_loop(initial,p,ctrl,false,angleOnlyMode);
 stress=run_closed_loop(initial,p,ctrl,true,angleOnlyMode);
 
@@ -178,7 +185,7 @@ subplot(3,1,3); plot(1:N,rad2deg(C(3,:)*zt),'k','LineWidth',1.6); hold on;
 plot(1:N,rad2deg(C(3,:)*zhLin),'b--','LineWidth',1.4);
 plot(1:N,rad2deg(C(3,:)*zhBil),'r-.','LineWidth',1.4);
 xlabel('prediction step'); ylabel('theta [deg]'); grid on;
-exportgraphics(fig1,fullfile(resultsDir,'prediction_validation.png'),'Resolution',180);
+exportgraphics(fig1,result_file(resultsDir,'prediction_validation',resultSuffix,'png'),'Resolution',180);
 
 %% Closed-loop figures
 fig2=figure('Color','w','Position',[100 80 980 820]);
@@ -204,7 +211,7 @@ stairs(nominal.time_s(1:end-1),p.amax*nominal.u,'Color',[0.2 0.55 1], ...
 yline(p.amax,'k:'); yline(-p.amax,'k:'); xlabel('time [s]');
 ylabel('A [m/s^2]'); legend('nominal actual','stress actual','nominal command');
 grid on;
-exportgraphics(fig2,fullfile(resultsDir,'closed_loop.png'),'Resolution',180);
+exportgraphics(fig2,result_file(resultsDir,'closed_loop',resultSuffix,'png'),'Resolution',180);
 
 fig3=figure('Color','w','Position',[100 100 920 500]);
 subplot(2,1,1); plot(nominal.time_s(1:end-1),nominal.xi,'LineWidth',1.5); hold on;
@@ -213,7 +220,7 @@ ylabel('xi'); legend('nominal','stress'); grid on;
 subplot(2,1,2); semilogy(nominal.time_s(1:end-1),nominal.predictionError+1e-12,'LineWidth',1.4); hold on;
 semilogy(stress.time_s(1:end-1),stress.predictionError+1e-12,'--','LineWidth',1.4);
 xlabel('time [s]'); ylabel('prediction error'); grid on;
-exportgraphics(fig3,fullfile(resultsDir,'interpolation_error.png'),'Resolution',180);
+exportgraphics(fig3,result_file(resultsDir,'interpolation_error',resultSuffix,'png'),'Resolution',180);
 
 %% Save outputs
 metrics.maxBilinearConsistencyError=maxBilinearError;
@@ -227,10 +234,15 @@ metrics.terminalTightening=ctrl.terminalTightening;
 metrics.terminalTolTight=ctrl.terminalTolTight;
 metrics.nominal=nominal.metrics;
 metrics.stress=stress.metrics;
-save(fullfile(resultsDir,'stationary_target_results.mat'), ...
-    'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
+if isempty(resultSuffix)
+    save(fullfile(resultsDir,'stationary_target_results.mat'), ...
+        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
+else
+    save(result_file(resultsDir,'stationary_target_results',resultSuffix,'mat'), ...
+        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
+end
 
-fid=fopen(fullfile(resultsDir,'metrics.txt'),'w');
+fid=fopen(result_file(resultsDir,'metrics',resultSuffix,'txt'),'w');
 fprintf(fid,'Stationary-target Koopman guidance validation\n');
 fprintf(fid,'max_bilinear_consistency_error=%.12e\n',maxBilinearError);
 fprintf(fid,'one_step_nrmse='); fprintf(fid,' %.8e',oneNRMSE); fprintf(fid,'\n');
@@ -685,4 +697,13 @@ function write_case(fid,name,m)
     fprintf(fid,'\n');
     fprintf(fid,'%s_final_alpha_hat=%.8f\n',name,m.finalAlphaHat);
     fprintf(fid,'%s_final_beta_hat=%.8f\n',name,m.finalBetaHat);
+end
+
+function path=result_file(resultsDir,baseName,suffix,ext)
+    if isempty(suffix)
+        fileName=sprintf('%s.%s',baseName,ext);
+    else
+        fileName=sprintf('%s_%s.%s',baseName,suffix,ext);
+    end
+    path=fullfile(resultsDir,fileName);
 end
