@@ -2,7 +2,21 @@
 if ~exist('skipClearOverride','var') || ~skipClearOverride
     clearvars -except impactTimeOverride impactGammaDegOverride ...
         angleOnlyModeOverride initialGammaDegOverride resultSuffixOverride ...
-        nStepsOverride nTrainTrajOverride nTestTrajOverride;
+        nStepsOverride nTrainTrajOverride nTestTrajOverride ...
+        horizonOverride qxOverride qterminalOverride rbarScaleOverride ...
+        rdOverride duMaxOverride q0ScaleOverride xiPenaltyOverride slackPenaltyOverride ...
+        seqIterationsOverride maxTighteningFractionOverride ...
+        enableAdaptiveOverride alphaBoundsOverride betaBoundsOverride ...
+        enableTwoStageCostOverride twoStageWindowOverride ...
+        qprogressOverride qterminalStageOverride ...
+        enableTerminalRefinementOverride terminalRefinementWindowOverride ...
+        nmpcMoveBlocksOverride terminalNmpcMaxIterationsOverride ...
+        enableImpactStageCostOverride ...
+        angleOnlyMaxTimeOverride gammaMaxDegOverride ...
+        trainingDataModeOverride angleStateModeOverride ...
+        angleOnlyTerminalTauOverride angleOnlyZeroTauRefOverride ...
+        fovMaxDegOverride fovMinRangeOverride disableFovOverride ...
+        skipControllerComparisonOverride;
 end
 clc; close all;
 rng(97,'twister');
@@ -15,19 +29,31 @@ if ~exist(resultsDir,'dir'), mkdir(resultsDir); end
 %% Parameters
 p.Vnom=300;               % [m/s]
 p.Vactual=0.97*p.Vnom;   % stress-test speed [m/s]
-p.Rscale=6000;            % position scale [m]
+p.Rscale=10000;            % position scale [m]
 p.amax=100;               % acceleration limit [m/s^2]
 p.tauA=0.10;              % first-order autopilot time constant [s]
 p.Ts=0.1;                 % sample time [s]
 p.inputEffectiveness=0.94;
-p.captureRadius=10;       % Cartesian coordinates permit a small capture set
-p.impactTime=21.7;        % prescribed impact time [s]
-p.impactGamma=deg2rad(-2);% prescribed impact angle / heading [rad]
+p.captureRadius=5;       % Cartesian coordinates permit a small capture set
+p.impactTime=40;        % prescribed impact time [s]
+p.impactGamma=deg2rad(30);% prescribed impact angle / heading [rad]
 p.impactTimeTolerance=p.Ts/2;
 p.impactAngleTolerance=deg2rad(3);
 p.postImpactWindow=2.0;   % keep simulating briefly after scheduled impact
+p.angleOnlyMaxTime=45.0;
+p.trainingDataMode='local';
+p.angleStateMode='theta';
 if exist('impactTimeOverride','var'), p.impactTime=impactTimeOverride; end
 if exist('impactGammaDegOverride','var'), p.impactGamma=deg2rad(impactGammaDegOverride); end
+if exist('angleOnlyMaxTimeOverride','var')
+    p.angleOnlyMaxTime=angleOnlyMaxTimeOverride;
+end
+if exist('trainingDataModeOverride','var')
+    p.trainingDataMode=trainingDataModeOverride;
+end
+if exist('angleStateModeOverride','var')
+    p.angleStateMode=angleStateModeOverride;
+end
 angleOnlyMode=false;
 if exist('angleOnlyModeOverride','var'), angleOnlyMode=angleOnlyModeOverride; end
 resultSuffix='';
@@ -37,6 +63,7 @@ N=35;                    % 3.5 s direct prediction horizon
 nSteps=90;
 nTrainTraj=260;
 nTestTraj=60;
+if exist('horizonOverride','var'), N=horizonOverride; end
 if exist('nStepsOverride','var'), nSteps=nStepsOverride; end
 if exist('nTrainTrajOverride','var'), nTrainTraj=nTrainTrajOverride; end
 if exist('nTestTrajOverride','var'), nTestTraj=nTestTrajOverride; end
@@ -48,8 +75,12 @@ test=generate_data(nTestTraj,nSteps,N,p,1000);
 
 %% Lift and identify one-step/direct multi-step predictors
 nz=size(train.Z0,1);
-nx=3;
-C=[zeros(3,1),eye(3),zeros(3,nz-4)]; % z=[1;tau/tf;y/Rscale;theta;nonlinear features]
+nx=numel(guidance_error_state([0;0;0;0],p));
+if strcmp(p.angleStateMode,'sincos')
+    C=[zeros(4,1),eye(4),zeros(4,nz-5)];
+else
+    C=[zeros(3,1),eye(3),zeros(3,nz-4)]; % z=[1;tau/tf;y/Rscale;theta;nonlinear features]
+end
 
 AB=ridge_regression(train.Zplus,[train.Zminus;train.Uone],ridge);
 A=AB(:,1:nz);
@@ -76,7 +107,12 @@ bilinearHat=bilinear_predict_dataset(test.Z0,test.Useq,Ablin,B0,B1,N,nz);
 bilinearPrediction=Cbar*bilinearHat;
 bilinearNRMSE=normalized_rmse(reshape(multiTruth,nx,[]), ...
     reshape(bilinearPrediction,nx,[]));
+oneRollingHat=linear_predict_dataset(test.Z0,test.Useq,A,B,N,nz);
+oneRollingPrediction=Cbar*oneRollingHat;
+oneRollingNRMSE=normalized_rmse(reshape(multiTruth,nx,[]), ...
+    reshape(oneRollingPrediction,nx,[]));
 tubeBound99=1.2*multi_step_residual_bound(multiTruth,bilinearPrediction,nx,N,0.99);
+linearTubeBound99=1.2*multi_step_residual_bound(multiTruth,multiPrediction,nx,N,0.99);
 
 %% Exact bilinear lifting consistency check
 bilinearErrors=zeros(1,300);
@@ -95,18 +131,25 @@ maxBilinearError=max(bilinearErrors);
 
 fprintf('Exact bilinear-lift RK4 consistency error: %.3e\n',maxBilinearError);
 fprintf('One-step EDMD NRMSE [tau,y,theta]:\n'); disp(oneNRMSE.');
+fprintf('Rolling one-step EDMD %d-step NRMSE [tau,y,theta]:\n',N); disp(oneRollingNRMSE.');
 fprintf('Direct %d-step EDMD NRMSE [tau,y,theta]:\n',N); disp(multiNRMSE.');
 fprintf('Bilinear rolling %d-step NRMSE [tau,y,theta]:\n',N); disp(bilinearNRMSE.');
 fprintf('95%% one-step residual [tau/tf,y/Rs,theta]:\n'); disp(oneResidual95.');
 fprintf('99%% tube terminal bound [tau/tf,y/Rs,theta]:\n'); disp(tubeBound99(:,end).');
 
 %% KDPC controller
-Qx=diag([600,900,35]);
-Qterminal=diag([70000,90000,1200]);
-if angleOnlyMode
+if strcmp(p.angleStateMode,'sincos')
+    Qx=diag([600,900,100,60]);
+    Qterminal=diag([70000,90000,20000,12000]);
+elseif angleOnlyMode
     Qx=diag([80,900,35]);
     Qterminal=diag([2000,90000,1200]);
+else
+    Qx=diag([600,900,35]);
+    Qterminal=diag([70000,90000,1200]);
 end
+if exist('qxOverride','var'), Qx=diag(qxOverride); end
+if exist('qterminalOverride','var'), Qterminal=diag(qterminalOverride); end
 Qxbar=kron(eye(N),Qx);
 Qxbar(end-nx+1:end,end-nx+1:end)=Qterminal;
 
@@ -116,12 +159,52 @@ ctrl.ThetaZ=ThetaZ; ctrl.ThetaU=ThetaU;
 ctrl.Ablin=Ablin; ctrl.B0=B0; ctrl.B1=B1;
 ctrl.seqIterations=3;
 ctrl.Qxbar=Qxbar;
+ctrl.enableTwoStageCost=false;
+ctrl.enableImpactStageCost=false;
+ctrl.Qprogress=Qx;
+ctrl.QterminalStage=Qx;
+ctrl.QterminalCost=Qterminal;
+ctrl.twoStageWindow=5.0;
 ctrl.Rbar=0.06*eye(N);
 ctrl.Rd=1.5;
+ctrl.duMax=inf;
 ctrl.Q0=0.02*eye(nz);
 ctrl.lambda=8e4;
+if exist('seqIterationsOverride','var'), ctrl.seqIterations=seqIterationsOverride; end
+if exist('enableTwoStageCostOverride','var')
+    ctrl.enableTwoStageCost=enableTwoStageCostOverride;
+end
+if exist('enableImpactStageCostOverride','var')
+    ctrl.enableImpactStageCost=enableImpactStageCostOverride;
+end
+if exist('qprogressOverride','var'), ctrl.Qprogress=diag(qprogressOverride); end
+if exist('qterminalStageOverride','var')
+    ctrl.QterminalStage=diag(qterminalStageOverride);
+end
+if exist('qterminalOverride','var'), ctrl.QterminalCost=diag(qterminalOverride); end
+if exist('twoStageWindowOverride','var'), ctrl.twoStageWindow=twoStageWindowOverride; end
+if exist('rbarScaleOverride','var'), ctrl.Rbar=rbarScaleOverride*eye(N); end
+if exist('rdOverride','var'), ctrl.Rd=rdOverride; end
+if exist('duMaxOverride','var'), ctrl.duMax=duMaxOverride; end
+if exist('q0ScaleOverride','var'), ctrl.Q0=q0ScaleOverride*eye(nz); end
+if exist('xiPenaltyOverride','var'), ctrl.lambda=xiPenaltyOverride; end
 ctrl.gammaMax=deg2rad(85);
+if exist('gammaMaxDegOverride','var')
+    ctrl.gammaMax=deg2rad(gammaMaxDegOverride);
+end
+ctrl.enableFov=false;
+ctrl.fovMax=deg2rad(20);
+ctrl.fovMinRange=300;
 ctrl.Ts=p.Ts;
+ctrl.angleStateMode=p.angleStateMode;
+ctrl.angleOnlyTerminalTau=false;
+ctrl.angleOnlyZeroTauRef=false;
+if exist('angleOnlyTerminalTauOverride','var')
+    ctrl.angleOnlyTerminalTau=angleOnlyTerminalTauOverride;
+end
+if exist('angleOnlyZeroTauRefOverride','var')
+    ctrl.angleOnlyZeroTauRef=angleOnlyZeroTauRefOverride;
+end
 ctrl.Vref=p.Vnom;
 ctrl.Rscale=p.Rscale;
 ctrl.amax=p.amax;
@@ -131,13 +214,23 @@ ctrl.angleOnlyMode=angleOnlyMode;
 ctrl.captureRadius=p.captureRadius;
 ctrl.impactTimeTolerance=p.impactTimeTolerance;
 ctrl.impactAngleTolerance=p.impactAngleTolerance;
-ctrl.terminalTol=[p.captureRadius/(p.Vnom*p.impactTime); ...
-    p.captureRadius/p.Rscale; p.impactAngleTolerance];
+if strcmp(p.angleStateMode,'sincos')
+    ctrl.terminalTol=[p.captureRadius/(p.Vnom*p.impactTime); ...
+        p.captureRadius/p.Rscale; sin(p.impactAngleTolerance); ...
+        1-cos(p.impactAngleTolerance)];
+else
+    ctrl.terminalTol=[p.captureRadius/(p.Vnom*p.impactTime); ...
+        p.captureRadius/p.Rscale; p.impactAngleTolerance];
+end
+ctrl.nSlack=nx;
 ctrl.residualBound95=oneResidual95;
 ctrl.tubeQuantile=0.99;
 ctrl.tubeInflation=1.2;
 ctrl.tubeBound=tubeBound99;
 ctrl.maxTighteningFraction=0.8;
+if exist('maxTighteningFractionOverride','var')
+    ctrl.maxTighteningFraction=maxTighteningFractionOverride;
+end
 ctrl.terminalTightening=min(ctrl.maxTighteningFraction*ctrl.terminalTol, ...
     ctrl.tubeBound(:,end));
 ctrl.terminalTolTight=ctrl.terminalTol-ctrl.terminalTightening;
@@ -146,18 +239,82 @@ ctrl.alphaHat=1;
 ctrl.betaHat=1;
 ctrl.alphaBounds=[0.90,1.10];
 ctrl.betaBounds=[0.85,1.10];
+if exist('enableAdaptiveOverride','var'), ctrl.enableAdaptive=enableAdaptiveOverride; end
+if exist('alphaBoundsOverride','var'), ctrl.alphaBounds=alphaBoundsOverride; end
+if exist('betaBoundsOverride','var'), ctrl.betaBounds=betaBoundsOverride; end
 ctrl.alphaGain=0.18;
 ctrl.betaGain=0.12;
 ctrl.adaptiveDeadzone=1e-5;
-ctrl.slackPenalty=diag([2e6,2e6,5e5]);
+if strcmp(p.angleStateMode,'sincos')
+    ctrl.slackPenalty=diag([2e6,2e6,5e5,5e5]);
+else
+    ctrl.slackPenalty=diag([2e6,2e6,5e5]);
+end
+if exist('slackPenaltyOverride','var'), ctrl.slackPenalty=diag(slackPenaltyOverride); end
 ctrl.options=optimoptions('quadprog','Display','off', ...
     'Algorithm','interior-point-convex');
+ctrl.controllerType='bilinear';
+ctrl.fminconOptions=optimoptions('fmincon','Display','off', ...
+    'Algorithm','sqp','MaxIterations',22,'MaxFunctionEvaluations',1400, ...
+    'OptimalityTolerance',2e-4,'StepTolerance',2e-5);
+ctrl.enableTerminalRefinement=false;
+ctrl.terminalRefinementWindow=4.0;
+ctrl.nmpcMoveBlocks=N;
+if exist('enableTerminalRefinementOverride','var')
+    ctrl.enableTerminalRefinement=enableTerminalRefinementOverride;
+end
+if exist('terminalRefinementWindowOverride','var')
+    ctrl.terminalRefinementWindow=terminalRefinementWindowOverride;
+end
+if exist('nmpcMoveBlocksOverride','var')
+    ctrl.nmpcMoveBlocks=nmpcMoveBlocksOverride;
+end
+if exist('terminalNmpcMaxIterationsOverride','var')
+    ctrl.fminconOptions.MaxIterations=terminalNmpcMaxIterationsOverride;
+end
+if exist('fovMaxDegOverride','var')
+    ctrl.enableFov=true;
+    ctrl.fovMax=deg2rad(fovMaxDegOverride);
+end
+if exist('disableFovOverride','var') && disableFovOverride
+    ctrl.enableFov=false;
+end
+if exist('fovMinRangeOverride','var')
+    ctrl.fovMinRange=fovMinRangeOverride;
+end
+runControllerComparison=true;
+if exist('skipControllerComparisonOverride','var')
+    runControllerComparison=~skipControllerComparisonOverride;
+end
 
-initialGammaDeg=25;
+initialGammaDeg=-30;
 if exist('initialGammaDegOverride','var'), initialGammaDeg=initialGammaDegOverride; end
-initial=[6000/p.Rscale;1500/p.Rscale;deg2rad(initialGammaDeg);0];
+initial=[10000/p.Rscale;0/p.Rscale;deg2rad(initialGammaDeg);0];
 nominal=run_closed_loop(initial,p,ctrl,false,angleOnlyMode);
 stress=run_closed_loop(initial,p,ctrl,true,angleOnlyMode);
+
+comparison=struct();
+comparison.bilinear=nominal;
+if runControllerComparison
+    linearCtrl=ctrl;
+    linearCtrl.controllerType='linear';
+    linearCtrl.enableAdaptive=false;
+    linearCtrl.tubeBound=linearTubeBound99;
+    linearCtrl.terminalTightening=min(linearCtrl.maxTighteningFraction*linearCtrl.terminalTol, ...
+        linearCtrl.tubeBound(:,end));
+    linearCtrl.terminalTolTight=linearCtrl.terminalTol-linearCtrl.terminalTightening;
+
+    nmpcCtrl=ctrl;
+    nmpcCtrl.controllerType='nmpc';
+    nmpcCtrl.enableAdaptive=false;
+    nmpcCtrl.tubeBound=zeros(size(ctrl.tubeBound));
+    nmpcCtrl.terminalTightening=zeros(size(ctrl.terminalTightening));
+    nmpcCtrl.terminalTolTight=nmpcCtrl.terminalTol;
+    nmpcCtrl.nmpcMoveBlocks=8;
+
+    comparison.linear=run_closed_loop(initial,p,linearCtrl,false,angleOnlyMode);
+    comparison.nmpc=run_closed_loop(initial,p,nmpcCtrl,false,angleOnlyMode);
+end
 
 fprintf('Nominal: impactOK=%d, scheduled miss=%.3f m, angle error=%.2f deg, QP failures=%d\n', ...
     nominal.impactSatisfied,nominal.impactRange_m, ...
@@ -165,25 +322,39 @@ fprintf('Nominal: impactOK=%d, scheduled miss=%.3f m, angle error=%.2f deg, QP f
 fprintf('Stress:  impactOK=%d, scheduled miss=%.3f m, angle error=%.2f deg, QP failures=%d\n', ...
     stress.impactSatisfied,stress.impactRange_m, ...
     stress.impactHeadingError_deg,stress.qpFailures);
+if runControllerComparison
+    fprintf('Closed-loop comparison completed: Linear Koopman-MPC, Bilinear Koopman-MPC, NMPC\n');
+end
 
 %% Prediction figure
 sample=min(100,size(test.Z0,2));
 zt=reshape(test.Zfuture(:,sample),nz,N);
+zhOne=reshape(oneRollingHat(:,sample),nz,N);
 zhLin=reshape(multiHat(:,sample),nz,N);
 zhBil=reshape(bilinearHat(:,sample),nz,N);
 fig1=figure('Color','w','Position',[100 100 900 680]);
 subplot(3,1,1); plot(1:N,p.impactTime*C(1,:)*zt,'k','LineWidth',1.6); hold on;
+plot(1:N,p.impactTime*C(1,:)*zhOne,'Color',[0.25 0.55 0.95], ...
+    'LineStyle',':','LineWidth',1.5);
 plot(1:N,p.impactTime*C(1,:)*zhLin,'b--','LineWidth',1.4);
 plot(1:N,p.impactTime*C(1,:)*zhBil,'r-.','LineWidth',1.4);
 ylabel('tau [s]'); grid on;
-legend('nonlinear','linear multi-step','bilinear rolling');
+legend('nonlinear','one-step EDMD rolling','linear multi-step','bilinear rolling');
 subplot(3,1,2); plot(1:N,p.Rscale*C(2,:)*zt,'k','LineWidth',1.6); hold on;
+plot(1:N,p.Rscale*C(2,:)*zhOne,'Color',[0.25 0.55 0.95], ...
+    'LineStyle',':','LineWidth',1.5);
 plot(1:N,p.Rscale*C(2,:)*zhLin,'b--','LineWidth',1.4);
 plot(1:N,p.Rscale*C(2,:)*zhBil,'r-.','LineWidth',1.4);
 ylabel('y [m]'); grid on;
-subplot(3,1,3); plot(1:N,rad2deg(C(3,:)*zt),'k','LineWidth',1.6); hold on;
-plot(1:N,rad2deg(C(3,:)*zhLin),'b--','LineWidth',1.4);
-plot(1:N,rad2deg(C(3,:)*zhBil),'r-.','LineWidth',1.4);
+thetaTrue=prediction_theta(C,zt,p);
+thetaOne=prediction_theta(C,zhOne,p);
+thetaLin=prediction_theta(C,zhLin,p);
+thetaBil=prediction_theta(C,zhBil,p);
+subplot(3,1,3); plot(1:N,rad2deg(thetaTrue),'k','LineWidth',1.6); hold on;
+plot(1:N,rad2deg(thetaOne),'Color',[0.25 0.55 0.95], ...
+    'LineStyle',':','LineWidth',1.5);
+plot(1:N,rad2deg(thetaLin),'b--','LineWidth',1.4);
+plot(1:N,rad2deg(thetaBil),'r-.','LineWidth',1.4);
 xlabel('prediction step'); ylabel('theta [deg]'); grid on;
 exportgraphics(fig1,result_file(resultsDir,'prediction_validation',resultSuffix,'png'),'Resolution',180);
 
@@ -213,6 +384,13 @@ ylabel('A [m/s^2]'); legend('nominal actual','stress actual','nominal command');
 grid on;
 exportgraphics(fig2,result_file(resultsDir,'closed_loop',resultSuffix,'png'),'Resolution',180);
 
+if runControllerComparison
+    figCmp=plot_guidance_comparison(comparison,p);
+    exportgraphics(figCmp,result_file(resultsDir,'closed_loop_guidance_comparison',resultSuffix,'png'), ...
+        'Resolution',180);
+    write_guidance_comparison_csv(comparison,resultsDir,resultSuffix);
+end
+
 fig3=figure('Color','w','Position',[100 100 920 500]);
 subplot(2,1,1); plot(nominal.time_s(1:end-1),nominal.xi,'LineWidth',1.5); hold on;
 plot(stress.time_s(1:end-1),stress.xi,'--','LineWidth',1.4);
@@ -225,27 +403,37 @@ exportgraphics(fig3,result_file(resultsDir,'interpolation_error',resultSuffix,'p
 %% Save outputs
 metrics.maxBilinearConsistencyError=maxBilinearError;
 metrics.oneStepNRMSE=oneNRMSE;
+metrics.oneStepRollingNRMSE=oneRollingNRMSE;
 metrics.multiStepNRMSE=multiNRMSE;
 metrics.bilinearRollingNRMSE=bilinearNRMSE;
 metrics.oneStepResidual95=oneResidual95;
 metrics.tubeBound99=tubeBound99;
+metrics.linearTubeBound99=linearTubeBound99;
 metrics.terminalTol=ctrl.terminalTol;
 metrics.terminalTightening=ctrl.terminalTightening;
 metrics.terminalTolTight=ctrl.terminalTolTight;
 metrics.nominal=nominal.metrics;
 metrics.stress=stress.metrics;
+metrics.comparison.bilinear=comparison.bilinear.metrics;
+if runControllerComparison
+    metrics.comparison.linear=comparison.linear.metrics;
+    metrics.comparison.nmpc=comparison.nmpc.metrics;
+end
 if isempty(resultSuffix)
     save(fullfile(resultsDir,'stationary_target_results.mat'), ...
-        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
+        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress', ...
+        'comparison','p','ctrl');
 else
     save(result_file(resultsDir,'stationary_target_results',resultSuffix,'mat'), ...
-        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress','p','ctrl');
+        'A','B','Ablin','B0','B1','C','Theta','metrics','nominal','stress', ...
+        'comparison','p','ctrl');
 end
 
 fid=fopen(result_file(resultsDir,'metrics',resultSuffix,'txt'),'w');
 fprintf(fid,'Stationary-target Koopman guidance validation\n');
 fprintf(fid,'max_bilinear_consistency_error=%.12e\n',maxBilinearError);
 fprintf(fid,'one_step_nrmse='); fprintf(fid,' %.8e',oneNRMSE); fprintf(fid,'\n');
+fprintf(fid,'one_step_rolling_nrmse='); fprintf(fid,' %.8e',oneRollingNRMSE); fprintf(fid,'\n');
 fprintf(fid,'multi_step_nrmse='); fprintf(fid,' %.8e',multiNRMSE); fprintf(fid,'\n');
 fprintf(fid,'bilinear_rolling_nrmse='); fprintf(fid,' %.8e',bilinearNRMSE); fprintf(fid,'\n');
 fprintf(fid,'one_step_residual95='); fprintf(fid,' %.8e',oneResidual95); fprintf(fid,'\n');
@@ -255,6 +443,11 @@ fprintf(fid,'terminal_tightening='); fprintf(fid,' %.8e',ctrl.terminalTightening
 fprintf(fid,'terminal_tol_tight='); fprintf(fid,' %.8e',ctrl.terminalTolTight); fprintf(fid,'\n');
 write_case(fid,'nominal',nominal.metrics);
 write_case(fid,'stress',stress.metrics);
+write_case(fid,'comparison_bilinear_koopman_mpc',comparison.bilinear.metrics);
+if runControllerComparison
+    write_case(fid,'comparison_linear_koopman_mpc',comparison.linear.metrics);
+    write_case(fid,'comparison_nmpc',comparison.nmpc.metrics);
+end
 fclose(fid);
 fprintf('Results saved in %s\n',resultsDir);
 
@@ -271,12 +464,28 @@ function data=generate_data(nTraj,nSteps,N,p,offset)
     s=0; w=0;
     for j=1:nTraj
         state=zeros(4,nSteps+1);
-        rx=0.35+0.95*rand;
-        ry=-0.45+0.9*rand;
-        lambda=atan2(ry,rx);
-        state(:,1)=[rx;ry;lambda-0.55+1.1*rand;0];
-        raw=repelem(2*rand(1,ceil(nSteps/7))-1,7);
-        input=filter(0.3,[1 -0.7],raw(1:nSteps));
+        if isfield(p,'trainingDataMode') && strcmp(p.trainingDataMode,'largeAngle')
+            ef=[cos(p.impactGamma);sin(p.impactGamma)];
+            nf=[-sin(p.impactGamma);cos(p.impactGamma)];
+            sAlong=(0.08+1.25*rand)*p.Rscale;
+            yCross=(-0.85+1.70*rand)*p.Rscale;
+            r=(sAlong*ef+yCross*nf)/p.Rscale;
+            theta=deg2rad(-170+340*rand);
+            gamma=wrap_angle(p.impactGamma+theta);
+            ua=-0.7+1.4*rand;
+            state(:,1)=[r(1);r(2);gamma;ua];
+            raw=repelem(2*rand(1,ceil(nSteps/5))-1,5);
+            harmonic=0.55*sin(0.045*(1:nSteps)+2*pi*rand)+ ...
+                0.30*cos(0.11*(1:nSteps)+2*pi*rand);
+            input=filter(0.45,[1 -0.55],raw(1:nSteps))+harmonic;
+        else
+            rx=0.35+0.95*rand;
+            ry=-0.45+0.9*rand;
+            lambda=atan2(ry,rx);
+            state(:,1)=[rx;ry;lambda-0.55+1.1*rand;0];
+            raw=repelem(2*rand(1,ceil(nSteps/7))-1,7);
+            input=filter(0.3,[1 -0.7],raw(1:nSteps));
+        end
         input=max(-1,min(1,input));
         for k=1:nSteps
             state(:,k+1)=plant_step(state(:,k),input(k),p,false);
@@ -297,11 +506,36 @@ function data=generate_data(nTraj,nSteps,N,p,offset)
 end
 
 function z=lift_state(x,p)
-    xt=time_to_go_state(x,p);
-    tau=xt(1); y=xt(2); th=xt(3);
+    xtRaw=time_to_go_state(x,p);
+    tau=xtRaw(1); y=xtRaw(2); th=xtRaw(3);
     ua=x(4);
-    z=[1;tau;y;th;ua;cos(th);sin(th);tau*cos(th);tau*sin(th); ...
-        y*cos(th);y*sin(th);th^2;ua*cos(th);ua*sin(th)];
+    if isfield(p,'angleStateMode') && strcmp(p.angleStateMode,'sincos')
+        cth=cos(th); sth=sin(th);
+        z=[1;tau;y;sth;cth;ua;tau*cth;tau*sth; ...
+            y*cth;y*sth;ua*cth;ua*sth;sth^2;cth^2];
+    else
+        z=[1;tau;y;th;ua;cos(th);sin(th);tau*cos(th);tau*sin(th); ...
+            y*cos(th);y*sin(th);th^2;ua*cos(th);ua*sin(th)];
+    end
+end
+
+function xt=guidance_error_state(x,p)
+    xtRaw=time_to_go_state(x,p);
+    if isfield(p,'angleStateMode') && strcmp(p.angleStateMode,'sincos')
+        th=xtRaw(3);
+        xt=[xtRaw(1);xtRaw(2);sin(th);cos(th)];
+    else
+        xt=xtRaw;
+    end
+end
+
+function theta=prediction_theta(C,Z,p)
+    X=C*Z;
+    if isfield(p,'angleStateMode') && strcmp(p.angleStateMode,'sincos')
+        theta=atan2(X(3,:),X(4,:));
+    else
+        theta=X(3,:);
+    end
 end
 
 function z=exact_bilinear_lift(x)
@@ -350,29 +584,63 @@ function Zfuture=bilinear_predict_dataset(Z0,Useq,A,B0,B1,N,nz)
     end
 end
 
+function Zfuture=linear_predict_dataset(Z0,Useq,A,B,N,nz)
+    nCases=size(Z0,2);
+    Zfuture=zeros(nz*N,nCases);
+    for cidx=1:nCases
+        z=Z0(:,cidx);
+        for h=1:N
+            z=A*z+B*Useq(h,cidx);
+            z(1)=1;
+            Zfuture((h-1)*nz+(1:nz),cidx)=z;
+        end
+    end
+end
+
 function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     if angleOnlyMode
-        Kmax=round(32/p.Ts);
+        Kmax=round(p.angleOnlyMaxTime/p.Ts);
     else
         Kmax=round((p.impactTime+p.postImpactWindow)/p.Ts);
     end
     x=zeros(numel(initial),Kmax+1); x(:,1)=initial;
     u=zeros(1,Kmax); xi=zeros(1,Kmax); err=zeros(1,Kmax); flags=zeros(1,Kmax);
-    terminalSlack=zeros(3,Kmax);
+    terminalSlack=zeros(c.nSlack,Kmax);
     zPrevious=lift_state(x(:,1),p);
     uPrev=0;
     last=Kmax+1;
     alphaHist=zeros(1,Kmax+1); betaHist=zeros(1,Kmax+1);
     alphaHist(1)=c.alphaHat; betaHist(1)=c.betaHat;
+    warmU=zeros(c.N,1);
+    solveTime=zeros(1,Kmax);
+    terminalRefinementUsed=false(1,Kmax);
     for k=1:Kmax
         zMeasured=lift_state(x(:,k),p);
         err(k)=norm(zPrevious-zMeasured);
-        [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
-            kdpc(zMeasured,zPrevious,c,k,uPrev);
+        tic;
+        useTerminalRefinement=terminal_refinement_active(c,k,angleOnlyMode);
+        if useTerminalRefinement
+            [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
+                nmpc_guidance(x(:,k),p,c,k,uPrev,warmU);
+            terminalRefinementUsed(k)=true;
+        elseif isfield(c,'controllerType') && strcmp(c.controllerType,'linear')
+            [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
+                linear_kdpc(zMeasured,zPrevious,c,k,uPrev);
+        elseif isfield(c,'controllerType') && strcmp(c.controllerType,'nmpc')
+            [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
+                nmpc_guidance(x(:,k),p,c,k,uPrev,warmU);
+        else
+            [useq,xi(k),Zpred,flags(k),terminalSlack(:,k)]= ...
+                kdpc(zMeasured,zPrevious,c,k,uPrev);
+        end
+        solveTime(k)=toc;
         u(k)=useq(1); uPrev=u(k); zPrevious=Zpred(1:c.nz);
+        warmU=[useq(2:end);useq(end)];
         x(:,k+1)=plant_step(x(:,k),u(k),p,stress);
         zNextMeasured=lift_state(x(:,k+1),p);
-        c=update_adaptive_estimate(c,zMeasured,zNextMeasured,u(k));
+        if ~isfield(c,'controllerType') || strcmp(c.controllerType,'bilinear')
+            c=update_adaptive_estimate(c,zMeasured,zNextMeasured,u(k));
+        end
         alphaHist(k+1)=c.alphaHat; betaHist(k+1)=c.betaHat;
         if angleOnlyMode
             range=p.Rscale*hypot(x(1,k+1),x(2,k+1));
@@ -386,9 +654,13 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.uActual=out.x(4,1:end-1);
     out.predictionError=err(1:last-1); out.exitflags=flags(1:last-1);
     out.terminalSlack=terminalSlack(:,1:last-1);
+    out.solveTime_s=solveTime(1:last-1);
+    out.terminalRefinementUsed=terminalRefinementUsed(1:last-1);
     out.alphaHat=alphaHist(1:last); out.betaHat=betaHist(1:last);
     out.time_s=(0:last-1)*p.Ts;
     out.range_m=p.Rscale*hypot(out.x(1,:),out.x(2,:));
+    out.lookAngle_rad=wrap_angle(out.x(3,:)-atan2(out.x(2,:),out.x(1,:)));
+    out.lookAngle_deg=rad2deg(out.lookAngle_rad);
     if angleOnlyMode
         captureIdx=find(out.range_m<=p.captureRadius,1,'first');
         if isempty(captureIdx)
@@ -430,6 +702,25 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.metrics.maxCommand_mps2=max(abs(out.u))*p.amax;
     out.metrics.maxAcceleration_mps2=max(abs(out.uActual))*p.amax;
     out.metrics.qpFailures=out.qpFailures;
+    out.metrics.terminalRefinementSteps=sum(out.terminalRefinementUsed);
+    out.metrics.meanSolveTime_ms=1000*mean(out.solveTime_s);
+    out.metrics.maxSolveTime_ms=1000*max(out.solveTime_s);
+    if isfield(c,'fovMinRange')
+        lookMask=out.time_s<=p.impactTime & out.range_m>=c.fovMinRange;
+    else
+        lookMask=out.time_s<=p.impactTime;
+    end
+    if ~any(lookMask)
+        lookMask=1:out.impactIndex;
+    end
+    out.metrics.maxLookAngle_deg=max(abs(out.lookAngle_deg(lookMask)));
+    if isfield(c,'enableFov') && c.enableFov
+        out.metrics.fovLimit_deg=rad2deg(c.fovMax);
+        out.metrics.fovViolation_deg=max(0,out.metrics.maxLookAngle_deg-rad2deg(c.fovMax));
+    else
+        out.metrics.fovLimit_deg=inf;
+        out.metrics.fovViolation_deg=0;
+    end
     out.metrics.meanXi=mean(out.xi);
     out.metrics.maxPredictionError=max(out.predictionError);
     out.metrics.maxTerminalSlack=max(out.terminalSlack,[],2);
@@ -437,9 +728,31 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.metrics.finalBetaHat=out.betaHat(end);
 end
 
+function active=terminal_refinement_active(c,k,angleOnlyMode)
+    active=false;
+    if angleOnlyMode
+        return;
+    end
+    if ~isfield(c,'enableTerminalRefinement') || ~c.enableTerminalRefinement
+        return;
+    end
+    timeNow=(k-1)*c.Ts;
+    timeToImpact=c.impactTime-timeNow;
+    active=timeToImpact>0 && timeToImpact<=c.terminalRefinementWindow;
+end
+
+function [U,xi,Zpred,exitflag,terminalSlack]=linear_kdpc(zMeasured,zPrevious,c,k,uPrev)
+    delta=zPrevious-zMeasured;
+    offsetZ=c.ThetaZ*zMeasured;
+    mapZ=[c.ThetaU,c.ThetaZ*delta];
+    [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
+        zMeasured,delta,c,k,uPrev);
+    Zpred=offsetZ+mapZ*[U;xi];
+end
+
 function [U,xi,Zpred,exitflag,terminalSlack]=kdpc(zMeasured,zPrevious,c,k,uPrev)
     delta=zPrevious-zMeasured;
-    U=zeros(c.N,1); xi=0; terminalSlack=zeros(3,1); exitflag=1;
+    U=zeros(c.N,1); xi=0; terminalSlack=zeros(c.nSlack,1); exitflag=1;
     for iter=1:c.seqIterations
         z0=zMeasured+xi*delta;
         zbar=bilinear_rollout_states(z0,U,c);
@@ -457,6 +770,131 @@ function [U,xi,Zpred,exitflag,terminalSlack]=kdpc(zMeasured,zPrevious,c,k,uPrev)
     end
     z0=zMeasured+xi*delta;
     Zpred=bilinear_rollout_stack(z0,U,c);
+end
+
+function [U,xi,Zpred,exitflag,terminalSlack]=nmpc_guidance(xMeasured,p,c,k,uPrev,warmU)
+    xi=0;
+    nSlack=c.nSlack;
+    nMove=nmpc_num_move_vars(c);
+    blockIdx=round(linspace(1,c.N,nMove));
+    x0=[warmU(blockIdx);zeros(nSlack,1)];
+    lb=[-ones(nMove,1);zeros(nSlack,1)];
+    ub=[ones(nMove,1);inf(nSlack,1)];
+    obj=@(v)nmpc_objective(v,xMeasured,p,c,k,uPrev);
+    nonlcon=@(v)nmpc_constraints(v,xMeasured,p,c,k);
+    [sol,~,exitflag]=fmincon(obj,x0,[],[],[],[],lb,ub,nonlcon,c.fminconOptions);
+    if isempty(sol)
+        sol=x0;
+        exitflag=-99;
+    end
+    U=nmpc_controls_from_vars(sol,c);
+    terminalSlack=sol(nMove+1:end);
+    Zpred=nmpc_lifted_rollout(xMeasured,U,p,c);
+end
+
+function cost=nmpc_objective(v,xMeasured,p,c,k,uPrev)
+    nMove=nmpc_num_move_vars(c);
+    U=nmpc_controls_from_vars(v,c);
+    slack=v(nMove+1:end);
+    [~,Xerr]=nmpc_rollout(xMeasured,U,p,c);
+    zMeasured=lift_state(xMeasured,p);
+    xRef=impact_reference_stack(k,c,zMeasured);
+    e=Xerr(:)-xRef;
+    [Hd,fd]=delta_u_penalty(c.N,c.Rd,uPrev);
+    Qcost=prediction_cost_matrix(c,k);
+    cost=e.'*Qcost*e+U.'*c.Rbar*U+U.'*Hd*U+2*fd.'*U+ ...
+        slack.'*c.slackPenalty*slack;
+end
+
+function [cineq,ceq]=nmpc_constraints(v,xMeasured,p,c,k)
+    nMove=nmpc_num_move_vars(c);
+    U=nmpc_controls_from_vars(v,c);
+    slack=v(nMove+1:end);
+    [~,Xerr]=nmpc_rollout(xMeasured,U,p,c);
+    zMeasured=lift_state(xMeasured,p);
+    xRef=reshape(impact_reference_stack(k,c,zMeasured),c.nx,c.N);
+    theta=Xerr(3,:);
+    cineq=[theta.'-(c.gammaMax-c.impactGamma); ...
+        -theta.'-(c.gammaMax+c.impactGamma)];
+    if isfield(c,'enableFov') && c.enableFov
+        for h=1:c.N
+            tauRef=max(abs(xRef(1,h)),c.fovMinRange/(c.Vref*c.impactTime));
+            yToLos=c.Rscale/(c.Vref*c.impactTime*tauRef);
+            sigmaApprox=Xerr(3,h)-yToLos*Xerr(2,h);
+            cineq=[cineq;sigmaApprox-c.fovMax;-sigmaApprox-c.fovMax];
+        end
+    end
+    if c.angleOnlyMode
+        hImpact=c.N;
+    else
+        currentTime=(k-1)*c.Ts;
+        hImpact=round((c.impactTime-currentTime)/c.Ts);
+    end
+    if hImpact>=1 && hImpact<=c.N
+        tol=terminal_tolerance_at_step(c,hImpact);
+        if c.angleOnlyMode
+            if isfield(c,'angleOnlyTerminalTau') && c.angleOnlyTerminalTau
+                terminalDims=1:c.nx;
+            else
+                terminalDims=2:c.nx;
+            end
+        else
+            terminalDims=1:c.nx;
+        end
+        errTerm=Xerr(:,hImpact)-xRef(:,hImpact);
+        for j=terminalDims
+            cineq=[cineq;errTerm(j)-tol(j)-slack(j); ...
+                -errTerm(j)-tol(j)-slack(j)];
+        end
+        yNorm=errTerm(2)/tol(2);
+        thNorm=errTerm(3)/tol(3);
+        cineq=[cineq; ...
+            yNorm+thNorm-1-slack(2)/tol(2)-slack(3)/tol(3); ...
+            yNorm-thNorm-1-slack(2)/tol(2)-slack(3)/tol(3); ...
+            -yNorm+thNorm-1-slack(2)/tol(2)-slack(3)/tol(3); ...
+            -yNorm-thNorm-1-slack(2)/tol(2)-slack(3)/tol(3)];
+    end
+    ceq=[];
+end
+
+function nMove=nmpc_num_move_vars(c)
+    if isfield(c,'nmpcMoveBlocks')
+        nMove=min(c.N,c.nmpcMoveBlocks);
+    else
+        nMove=c.N;
+    end
+end
+
+function U=nmpc_controls_from_vars(v,c)
+    nMove=nmpc_num_move_vars(c);
+    uBlocks=v(1:nMove);
+    if nMove==c.N
+        U=uBlocks;
+        return;
+    end
+    blockId=ceil((1:c.N)'*nMove/c.N);
+    blockId=max(1,min(nMove,blockId));
+    U=uBlocks(blockId);
+end
+
+function [Xstate,Xerr]=nmpc_rollout(xMeasured,U,p,c)
+    Xstate=zeros(numel(xMeasured),c.N);
+    Xerr=zeros(c.nx,c.N);
+    x=xMeasured;
+    for i=1:c.N
+        x=plant_step(x,U(i),p,false);
+        Xstate(:,i)=x;
+        Xerr(:,i)=guidance_error_state(x,p);
+    end
+end
+
+function Zpred=nmpc_lifted_rollout(xMeasured,U,p,c)
+    Zpred=zeros(c.nz*c.N,1);
+    x=xMeasured;
+    for i=1:c.N
+        x=plant_step(x,U(i),p,false);
+        Zpred((i-1)*c.nz+(1:c.nz))=lift_state(x,p);
+    end
 end
 
 function zbar=bilinear_rollout_states(z0,U,c)
@@ -510,6 +948,9 @@ function c=update_adaptive_estimate(c,z,zNext,u)
     if ~c.enableAdaptive
         return;
     end
+    if isfield(c,'angleStateMode') && strcmp(c.angleStateMode,'sincos')
+        return;
+    end
     x0=c.C*z;
     x1=c.C*zNext;
     dx=[x1(1)-x0(1);x1(2)-x0(2);wrap_angle(x1(3)-x0(3))];
@@ -539,14 +980,53 @@ function tol=terminal_tolerance_at_step(c,h)
     tol=c.terminalTol-tightening;
 end
 
+function Qbar=prediction_cost_matrix(c,k)
+    if ~isfield(c,'enableTwoStageCost') || ~c.enableTwoStageCost
+        Qbar=c.Qxbar;
+        if isfield(c,'enableImpactStageCost') && c.enableImpactStageCost
+            hImpact=impact_horizon_index(c,k);
+            if hImpact>=1 && hImpact<=c.N
+                idx=(hImpact-1)*c.nx+(1:c.nx);
+                Qbar(idx,idx)=c.QterminalCost;
+            end
+        end
+        return;
+    end
+    Qbar=zeros(c.nx*c.N);
+    hImpact=impact_horizon_index(c,k);
+    for h=1:c.N
+        t=(k-1+h)*c.Ts;
+        timeToImpact=c.impactTime-t;
+        if h==hImpact
+            Qh=c.QterminalCost;
+        elseif timeToImpact<=c.twoStageWindow
+            Qh=c.QterminalStage;
+        else
+            Qh=c.Qprogress;
+        end
+        idx=(h-1)*c.nx+(1:c.nx);
+        Qbar(idx,idx)=Qh;
+    end
+end
+
+function hImpact=impact_horizon_index(c,k)
+    if c.angleOnlyMode
+        hImpact=c.N;
+    else
+        currentTime=(k-1)*c.Ts;
+        hImpact=round((c.impactTime-currentTime)/c.Ts);
+    end
+end
+
 function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
     zMeasured,delta,c,k,uPrev)
     offsetX=c.Cbar*offsetZ; mapX=c.Cbar*mapZ;
     xRef=impact_reference_stack(k,c,zMeasured);
-    nBase=c.N+1; nSlack=3; nVar=nBase+nSlack;
+    Qcost=prediction_cost_matrix(c,k);
+    nBase=c.N+1; nSlack=c.nSlack; nVar=nBase+nSlack;
     H=zeros(nVar); f=zeros(nVar,1);
-    H(1:nBase,1:nBase)=2*(mapX'*c.Qxbar*mapX);
-    f(1:nBase)=2*(mapX'*c.Qxbar*(offsetX-xRef));
+    H(1:nBase,1:nBase)=2*(mapX'*Qcost*mapX);
+    f(1:nBase)=2*(mapX'*Qcost*(offsetX-xRef));
     H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*c.Rbar;
     [Hd,fd]=delta_u_penalty(c.N,c.Rd,uPrev);
     H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*Hd;
@@ -556,11 +1036,34 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
     H(nBase+1:end,nBase+1:end)=H(nBase+1:end,nBase+1:end)+ ...
         2*c.slackPenalty;
     H=0.5*(H+H')+1e-9*eye(nVar);
-    thetaSel=kron(eye(c.N),[0 0 1]);
-    Aineq=[thetaSel*mapX,zeros(c.N,nSlack); ...
-        -thetaSel*mapX,zeros(c.N,nSlack)];
-    bineq=[(c.gammaMax-c.impactGamma)*ones(c.N,1)-thetaSel*offsetX; ...
-        (c.gammaMax+c.impactGamma)*ones(c.N,1)+thetaSel*offsetX];
+    if strcmp(c.angleStateMode,'sincos')
+        Aineq=zeros(0,nVar);
+        bineq=zeros(0,1);
+    else
+        thetaSel=kron(eye(c.N),[0 0 1]);
+        Aineq=[thetaSel*mapX,zeros(c.N,nSlack); ...
+            -thetaSel*mapX,zeros(c.N,nSlack)];
+        bineq=[(c.gammaMax-c.impactGamma)*ones(c.N,1)-thetaSel*offsetX; ...
+            (c.gammaMax+c.impactGamma)*ones(c.N,1)+thetaSel*offsetX];
+    end
+    if isfield(c,'enableFov') && c.enableFov
+        xRefMat=reshape(xRef,c.nx,c.N);
+        for h=1:c.N
+            tauRef=max(abs(xRefMat(1,h)),c.fovMinRange/(c.Vref*c.impactTime));
+            yToLos=c.Rscale/(c.Vref*c.impactTime*tauRef);
+            idx=(h-1)*c.nx+(1:c.nx);
+            fovRow=mapX(idx(3),:)-yToLos*mapX(idx(2),:);
+            fovOff=offsetX(idx(3))-yToLos*offsetX(idx(2));
+            Aineq=[Aineq;fovRow,zeros(1,nSlack); ...
+                -fovRow,zeros(1,nSlack)];
+            bineq=[bineq;c.fovMax-fovOff;c.fovMax+fovOff];
+        end
+    end
+    if isfield(c,'duMax') && isfinite(c.duMax)
+        [Adu,bdu]=delta_u_hard_constraints(c.N,c.duMax,uPrev,nVar);
+        Aineq=[Aineq;Adu];
+        bineq=[bineq;bdu];
+    end
     if c.angleOnlyMode
         hImpact=c.N;
     else
@@ -570,7 +1073,7 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
     if hImpact>=1 && hImpact<=c.N
         idx=(hImpact-1)*c.nx+(1:c.nx);
         tol=terminal_tolerance_at_step(c,hImpact);
-        slackCols=[1 0 0;0 1 0;0 0 1];
+        slackCols=eye(nSlack);
         if c.angleOnlyMode
             terminalDims=2:c.nx;
         else
@@ -589,17 +1092,17 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
             bineq=[bineq;tol(j)-xRef(idx(j))+offsetX(idx(j))];
         end
         yRow=mapX(idx(2),:)/tol(2);
-        thRow=mapX(idx(3),:)/tol(3);
+        angleRow=mapX(idx(3),:)/tol(3);
         yOff=(offsetX(idx(2))-xRef(idx(2)))/tol(2);
-        thOff=(offsetX(idx(3))-xRef(idx(3)))/tol(3);
+        angleOff=(offsetX(idx(3))-xRef(idx(3)))/tol(3);
         for sy=[-1,1]
             for st=[-1,1]
                 row=zeros(1,nVar);
-                row(1:nBase)=sy*yRow+st*thRow;
+                row(1:nBase)=sy*yRow+st*angleRow;
                 row(nBase+2)=-1/tol(2);
                 row(nBase+3)=-1/tol(3);
                 Aineq=[Aineq;row];
-                bineq=[bineq;1-sy*yOff-st*thOff];
+                bineq=[bineq;1-sy*yOff-st*angleOff];
             end
         end
     end
@@ -610,6 +1113,17 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
     U=sol(1:c.N);
     xi=sol(nBase);
     terminalSlack=sol(nBase+1:end);
+end
+
+function [Adu,bdu]=delta_u_hard_constraints(N,duMax,uPrev,nVar)
+    D=eye(N);
+    for i=2:N
+        D(i,i-1)=-1;
+    end
+    offset=zeros(N,1);
+    offset(1)=uPrev;
+    Adu=[D,zeros(N,nVar-N);-D,zeros(N,nVar-N)];
+    bdu=[duMax+offset;duMax-offset];
 end
 
 function [Hdu,fdu]=delta_u_penalty(N,Rd,uPrev)
@@ -630,11 +1144,23 @@ function xRef=impact_reference_stack(k,c,zMeasured)
         t=(k-1+h)*c.Ts;
         idx=(h-1)*c.nx+(1:c.nx);
         if c.angleOnlyMode
-            tauRef=max(xNow(1)-h*c.Ts/c.impactTime,0);
-            xRef(idx)=[tauRef;0;0];
+            if isfield(c,'angleOnlyZeroTauRef') && c.angleOnlyZeroTauRef
+                tauRef=0;
+            else
+                tauRef=max(xNow(1)-h*c.Ts/c.impactTime,0);
+            end
+            if strcmp(c.angleStateMode,'sincos')
+                xRef(idx)=[tauRef;0;0;1];
+            else
+                xRef(idx)=[tauRef;0;0];
+            end
         else
             tgo=max(c.impactTime-t,0);
-            xRef(idx)=[tgo/c.impactTime;0;0];
+            if strcmp(c.angleStateMode,'sincos')
+                xRef(idx)=[tgo/c.impactTime;0;0;1];
+            else
+                xRef(idx)=[tgo/c.impactTime;0;0];
+            end
         end
     end
 end
@@ -643,6 +1169,84 @@ function ref=impact_reference_path(p)
     t=linspace(0,p.impactTime,120);
     ef=[cos(p.impactGamma);sin(p.impactGamma)];
     ref=p.Vnom*(p.impactTime-t).*ef;
+end
+
+function fig=plot_guidance_comparison(comparison,p)
+    methods={'linear','bilinear','nmpc'};
+    labels={'Linear Koopman-MPC','Bilinear Koopman-MPC','NMPC'};
+    colors=[0.05 0.35 0.75;0.82 0.18 0.16;0.12 0.52 0.25];
+    styles={'--','-','-.'};
+    fig=figure('Color','w','Position',[90 60 1060 820]);
+    tiledlayout(2,2,'TileSpacing','compact','Padding','compact');
+
+    nexttile; hold on; grid on; axis equal;
+    for i=1:numel(methods)
+        out=comparison.(methods{i});
+        plot(p.Rscale*out.x(1,:),p.Rscale*out.x(2,:), ...
+            'Color',colors(i,:),'LineStyle',styles{i},'LineWidth',1.7, ...
+            'DisplayName',labels{i});
+        plot(p.Rscale*out.x(1,out.impactIndex), ...
+            p.Rscale*out.x(2,out.impactIndex),'o', ...
+            'Color',colors(i,:),'MarkerFaceColor',colors(i,:), ...
+            'HandleVisibility','off');
+    end
+    refLine=impact_reference_path(p);
+    plot(refLine(1,:),refLine(2,:),'k:','LineWidth',1.0, ...
+        'DisplayName','reference');
+    plot(0,0,'ko','MarkerFaceColor','k','HandleVisibility','off');
+    xlabel('r_x [m]'); ylabel('r_y [m]'); title('Trajectory');
+    legend('Location','southoutside','NumColumns',2);
+
+    nexttile; hold on; grid on;
+    for i=1:numel(methods)
+        out=comparison.(methods{i});
+        plot(out.time_s,out.range_m,'Color',colors(i,:), ...
+            'LineStyle',styles{i},'LineWidth',1.5);
+        plot(out.impactTime_s,out.impactRange_m,'o', ...
+            'Color',colors(i,:),'MarkerFaceColor',colors(i,:));
+    end
+    yline(p.captureRadius,'k--'); xline(p.impactTime,'k-.');
+    xlabel('time [s]'); ylabel('range [m]'); title('Range');
+
+    nexttile; hold on; grid on;
+    for i=1:numel(methods)
+        out=comparison.(methods{i});
+        plot(out.time_s,rad2deg(out.x(3,:)),'Color',colors(i,:), ...
+            'LineStyle',styles{i},'LineWidth',1.5);
+    end
+    yline(rad2deg(p.impactGamma),'k:'); xline(p.impactTime,'k-.');
+    xlabel('time [s]'); ylabel('gamma [deg]'); title('Flight-path angle');
+
+    nexttile; hold on; grid on;
+    for i=1:numel(methods)
+        out=comparison.(methods{i});
+        plot(out.time_s(1:end-1),p.amax*out.uActual, ...
+            'Color',colors(i,:),'LineStyle',styles{i},'LineWidth',1.4);
+    end
+    yline(p.amax,'k--'); yline(-p.amax,'k--');
+    xlabel('time [s]'); ylabel('A [m/s^2]');
+    title('Actual lateral acceleration');
+    sgtitle('Closed-loop guidance comparison');
+end
+
+function write_guidance_comparison_csv(comparison,resultsDir,suffix)
+    path=result_file(resultsDir,'closed_loop_guidance_comparison_summary',suffix,'csv');
+    fid=fopen(path,'w');
+    fprintf(fid,['method,satisfied,impact_time_s,impact_time_error_s,miss_m,', ...
+        'angle_error_deg,max_command_mps2,max_accel_mps2,solver_failures,', ...
+        'mean_solve_ms,max_solve_ms\n']);
+    write_comparison_row(fid,'Linear Koopman-MPC',comparison.linear.metrics);
+    write_comparison_row(fid,'Bilinear Koopman-MPC',comparison.bilinear.metrics);
+    write_comparison_row(fid,'NMPC',comparison.nmpc.metrics);
+    fclose(fid);
+end
+
+function write_comparison_row(fid,name,m)
+    fprintf(fid,'"%s",%d,%.8f,%.8f,%.8f,%.8f,%.8f,%.8f,%d,%.8f,%.8f\n', ...
+        name,m.impactSatisfied,m.impactTime_s,m.impactTimeError_s, ...
+        m.impactRange_m,m.impactHeadingError_deg,m.maxCommand_mps2, ...
+        m.maxAcceleration_mps2,m.qpFailures,m.meanSolveTime_ms, ...
+        m.maxSolveTime_ms);
 end
 
 function a=wrap_angle(a)
@@ -690,6 +1294,11 @@ function write_case(fid,name,m)
     fprintf(fid,'%s_max_command_mps2=%.8f\n',name,m.maxCommand_mps2);
     fprintf(fid,'%s_max_acceleration_mps2=%.8f\n',name,m.maxAcceleration_mps2);
     fprintf(fid,'%s_qp_failures=%d\n',name,m.qpFailures);
+    fprintf(fid,'%s_mean_solve_time_ms=%.8f\n',name,m.meanSolveTime_ms);
+    fprintf(fid,'%s_max_solve_time_ms=%.8f\n',name,m.maxSolveTime_ms);
+    fprintf(fid,'%s_max_look_angle_deg=%.8f\n',name,m.maxLookAngle_deg);
+    fprintf(fid,'%s_fov_limit_deg=%.8f\n',name,m.fovLimit_deg);
+    fprintf(fid,'%s_fov_violation_deg=%.8f\n',name,m.fovViolation_deg);
     fprintf(fid,'%s_mean_xi=%.8f\n',name,m.meanXi);
     fprintf(fid,'%s_max_prediction_error=%.8f\n',name,m.maxPredictionError);
     fprintf(fid,'%s_max_terminal_slack=',name);

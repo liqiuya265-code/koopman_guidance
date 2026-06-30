@@ -4,4 +4,7 @@ __pycache__/
 *.m~
 .DS_Store
 Thumbs.db
-
+*.aux
+*.log
+*.synctex.gz
+*.synctex(busy)

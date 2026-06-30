@@ -29,7 +29,7 @@
 \maketitle
 
 \begin{abstract}
-This paper investigates a Koopman-operator-based model predictive guidance method for a planar stationary-target engagement subject to simultaneous impact-time and impact-angle constraints. The finite-time interception condition is difficult to handle in the original relative-motion coordinates because the target point is not an equilibrium of the constant-speed pursuer dynamics. To address this issue, a time-to-go lateral-error model is constructed, in which the prescribed impact time, cross-track displacement, and terminal heading error are represented by a terminal origin. It is first shown that the ideal Cartesian acceleration-controlled model admits an exact finite-dimensional continuous-time bilinear Koopman representation under the constant-speed stationary-target assumption. Based on this structure, a bilinear extended dynamic mode decomposition predictor is learned and embedded into a sequential convex Koopman model predictive control scheme. The implemented predictor further includes a first-order autopilot state, so that the optimized command is filtered before acting on the flight-path dynamics. A validation-data residual tube is introduced to tighten the terminal constraints and to connect nominal predicted feasibility with the original impact constraints. Numerical simulations with a 10 m capture radius show that the proposed method satisfies the prescribed impact time of 21.7 s and impact angle of $-2^\circ$, achieving a 5.978 m terminal miss distance and a $0.647^\circ$ impact-angle error without quadratic-program failures. Additional nominal scenarios indicate that the same controller structure also satisfies a slightly delayed 21.75 s terminal-time command, while earlier, later, or substantially different impact-angle commands can leave the 10 m capture set. These results demonstrate that the time-to-go bilinear Koopman formulation provides a tractable predictive-guidance framework for nominal multi-constraint interception and a useful diagnostic tool for terminal reachability.
+This paper investigates a Koopman-operator-based model predictive guidance method for a planar stationary-target engagement subject to simultaneous impact-time and impact-angle constraints. The development separates the unconstrained guidance core from the constrained terminal task. It is first shown that the ideal Cartesian acceleration-controlled core admits an exact finite-dimensional continuous-time bilinear Koopman representation under the constant-speed stationary-target assumption. The finite-time interception condition is then handled by constructing a time-to-go lateral-error model, in which the prescribed impact time, cross-track displacement, and terminal heading error are represented by a terminal origin. Based on the analytic bilinear structure, a task-oriented bilinear extended dynamic mode decomposition predictor is learned from sampled trajectories and embedded into a sequential convex Koopman model predictive control scheme. The implemented predictor further includes a first-order autopilot state, so that the optimized command is filtered before acting on the flight-path dynamics. A validation-data residual tube is introduced to tighten the terminal constraints and to connect nominal predicted feasibility with the original impact constraints. Numerical simulations with a 10 m capture radius show that the proposed method satisfies the prescribed impact time of 21.7 s and impact angle of $-2^\circ$, achieving a 5.978 m terminal miss distance and a $0.647^\circ$ impact-angle error without quadratic-program failures. Under the same scenario, a linear Koopman-MPC baseline misses the capture set, whereas a move-blocking NMPC baseline is substantially slower and experiences nonlinear-program failures. Additional nominal scenarios indicate that the same controller structure also satisfies a slightly delayed 21.75 s terminal-time command, while earlier, later, or substantially different impact-angle commands can leave the 10 m capture set. These results demonstrate that the time-to-go bilinear Koopman formulation provides a tractable predictive-guidance framework for nominal multi-constraint interception and a useful diagnostic tool for terminal reachability.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -43,15 +43,15 @@ Model predictive control (MPC) is attractive for this setting because terminal a
 
 The main contributions are summarized as follows.
 \begin{enumerate}
-    \item A finite-dimensional continuous-time bilinear Koopman representation is derived for the constant-speed stationary-target guidance model in Cartesian relative coordinates. This result clarifies why a bilinear lifted predictor is more consistent with the control-affine guidance dynamics than a purely linear input predictor.
-    \item A time-to-go lateral-error state $x_\tau=[\tau/t_f,\;y/R_s,\;\theta]^T$ is introduced to convert the impact-time, cross-track, and impact-angle requirements into a terminal-origin condition suitable for predictive guidance.
-    \item A sequential convex bilinear Koopman-MPC law is constructed with interpolation between measured and predicted lifted states, an input-difference penalty, terminal slack variables, and residual-tube terminal tightening.
-    \item Nominal simulations verify the prediction accuracy and constrained terminal performance of the proposed method under a 10 m capture-radius requirement.
+    \item A finite-dimensional continuous-time bilinear Koopman representation is derived for the unconstrained constant-speed stationary-target guidance core in Cartesian relative coordinates. This result clarifies why a bilinear lifted predictor is more consistent with the control-affine guidance dynamics than a purely linear input predictor.
+    \item The unconstrained core is extended to the constrained terminal-guidance task by introducing a time-to-go lateral-error state $x_\tau=[\tau/t_f,\;y/R_s,\;\theta]^T$, which converts the impact-time, cross-track, and impact-angle requirements into a terminal-origin condition.
+    \item A data-driven sequential convex bilinear Koopman-MPC law is constructed with interpolation between measured and predicted lifted states, an input-difference penalty, terminal slack variables, and residual-tube terminal tightening.
+    \item Nominal simulations compare one-step EDMD, direct multi-step EDMD, the proposed bilinear predictor, linear Koopman-MPC, and move-blocking NMPC under a 10 m capture-radius requirement.
 \end{enumerate}
 
-The remainder of this paper is organized as follows. Section II formulates the engagement model and terminal constraints. Section III derives the exact continuous-time bilinear Koopman representation. Section IV constructs the time-to-go terminal-error model. Section V presents the bilinear EDMD predictor and the sequential convex Koopman-MPC design. Section VI develops the residual-tube terminal tightening. Section VII reports nominal simulation results, and Section VIII concludes the paper.
+The remainder of this paper is organized as follows. Section II formulates the unconstrained planar guidance core. Section III derives the exact continuous-time bilinear Koopman structure of this core model. Section IV extends the formulation to impact-time and impact-angle constraints through a time-to-go terminal-error state. Section V presents the data-driven bilinear EDMD predictor and the sequential convex Koopman-MPC design. Section VI develops the residual-tube terminal tightening. Section VII reports nominal simulation results, and Section VIII concludes the paper.
 
-\section{Planar Guidance Problem}
+\section{Unconstrained Planar Guidance Core}
 
 \subsection{Relative Motion}
 Consider a stationary target at the origin and a pursuer moving at constant nominal speed $V>0$ in the planar engagement. Let
@@ -76,24 +76,13 @@ The closed-loop simulations additionally pass the optimized command $u_c$ throug
     \tau_a\dot u_a=-u_a+u_c,\qquad |u_c|\le1 ,
     \label{eq:autopilot}
 \end{equation}
-where $u_a$ is the actual normalized lateral acceleration. The ideal model \eqref{eq:cartesian_model} is recovered when $u_a=u_c=u$. The simulations use $V=300$ m/s, $A_{\max}=100$ m/s$^2$, sampling period $T_s=0.1$ s, and autopilot time constant $\tau_a=0.10$ s.
+where $u_a$ is the actual normalized lateral acceleration. The ideal model \eqref{eq:cartesian_model} is recovered when $u_a=u_c=u$. The simulations use $V=300$ m/s, $A_{\max}=100$ m/s$^2$, sampling period $T_s=0.1$ s, and autopilot time constant $\tau_a=0.10$ s. The present section only defines the unconstrained guidance core; the impact-time and impact-angle requirements are introduced after the Koopman structure of this core has been established.
 
 \begin{assumption}
 The target is stationary, the pursuer speed is constant within each case, the command $u$ is piecewise constant and bounded, and the engagement is considered before the singular intercept instant. The heading angle is treated as an unwrapped real variable when differentiability is needed.
 \end{assumption}
 
-\subsection{Impact-Time and Impact-Angle Constraints}
-Let $t_f$ be the prescribed impact time and $\gamma_f$ be the prescribed impact angle. The terminal requirements are
-\begin{equation}
-    \|r(t_f)\|\le r_c,\qquad
-    |\gamma(t_f)-\gamma_f|\le \varepsilon_\gamma ,
-    \label{eq:terminal_requirements}
-\end{equation}
-where the current implementation uses $r_c=10$ m and $\varepsilon_\gamma=3^\circ$. The scheduled-time tolerance is one half sampling period, i.e., $\varepsilon_t=T_s/2$.
-
-The main conceptual difficulty is that $r=0$ is not an equilibrium of \eqref{eq:cartesian_model}. Even if the pursuer reaches the target, $\dot r$ remains nonzero. Thus, terminal stability and recursive-feasibility arguments cannot be copied directly from regulation MPC in the original Cartesian state. A terminal coordinate must encode the remaining time-to-go and lateral impact error.
-
-\section{Koopman Modeling Structure}
+\section{Exact Bilinear Koopman Structure of the Guidance Core}
 
 \subsection{Controlled Koopman Generator}
 For a controlled nonlinear system
@@ -117,15 +106,19 @@ In polar line-of-sight coordinates with range $R$, line-of-sight angle $\lambda$
 If the observable dictionary contains $1/R$, $\sin\sigma$, and $\cos\sigma$, then repeated differentiation generates terms such as $R^{-2}$, $\sin\sigma\cos\sigma/R$, and higher rational-trigonometric products. Hence a small finite dictionary of conventional polar observables does not generally yield exact linear-in-input closure. EDMD can still approximate the dynamics on a bounded operating domain, but the residual must be explicitly treated.
 
 \subsection{Exact Continuous-Time Bilinear Lift}
-In Cartesian relative coordinates, the situation is different. Define the lifted state
+In Cartesian relative coordinates, the situation is different. Let the unconstrained core state be
 \begin{equation}
-    z=
+    x_c=\begin{bmatrix}r_x&r_y&\gamma\end{bmatrix}^T .
+\end{equation}
+For this core model, define the analytic lifted state
+\begin{equation}
+    z_c=\psi_c(x_c)=
     \begin{bmatrix}
     1&r_x&r_y&\gamma&\cos\gamma&\sin\gamma
     \end{bmatrix}^T .
     \label{eq:exact_lift}
 \end{equation}
-Then the observable span generated by \eqref{eq:exact_lift} is invariant under $\mathcal L_0$ and $\mathcal L_1$. Specifically,
+This lift is a hand-constructed observable vector for the ideal guidance core, not the data-driven dictionary used later in the online controller. The observable span generated by \eqref{eq:exact_lift} is invariant under $\mathcal L_0$ and $\mathcal L_1$. Specifically,
 \begin{equation}
     \mathcal L_0 r_x=-V\cos\gamma,\qquad
     \mathcal L_0 r_y=-V\sin\gamma ,
@@ -139,30 +132,43 @@ Then the observable span generated by \eqref{eq:exact_lift} is invariant under $
 \end{equation}
 Therefore
 \begin{equation}
-    \dot z=A_0z+uB_1z ,
+    \dot z_c=A_{0c}z_c+uB_{1c}z_c ,
     \label{eq:exact_bilinear}
 \end{equation}
 where the nonzero entries are
 \begin{equation}
-    A_0(2,5)=-V,\quad A_0(3,6)=-V,
+    A_{0c}(2,5)=-V,\quad A_{0c}(3,6)=-V,
 \end{equation}
 \begin{equation}
 \begin{aligned}
-    B_1(4,1)&=\frac{A_{\max}}{V},\\
-    B_1(5,6)&=-\frac{A_{\max}}{V},\\
-    B_1(6,5)&=\frac{A_{\max}}{V}.
+    B_{1c}(4,1)&=\frac{A_{\max}}{V},\\
+    B_{1c}(5,6)&=-\frac{A_{\max}}{V},\\
+    B_{1c}(6,5)&=\frac{A_{\max}}{V}.
 \end{aligned}
 \end{equation}
 
 \begin{proposition}
-Under Assumption 1, the planar stationary-target guidance model \eqref{eq:cartesian_model} admits the exact finite-dimensional continuous-time bilinear Koopman representation \eqref{eq:exact_bilinear} on the observable space spanned by \eqref{eq:exact_lift}.
+Under Assumption 1, the planar stationary-target guidance core \eqref{eq:cartesian_model} admits the exact finite-dimensional continuous-time bilinear Koopman representation \eqref{eq:exact_bilinear} on the observable space spanned by \eqref{eq:exact_lift}.
 \end{proposition}
 
 \begin{remark}
-The exact continuous-time bilinear representation is not the same object as the finite-dimensional predictor used inside the online quadratic program. Under zero-order-hold input, the exact discrete lifted map is $z_{k+1}=\exp(T_s(A_0+u_kB_1))z_k$, which depends nonlinearly on $u_k$. The data-driven predictor below is therefore a tractable approximation on a prescribed operating domain.
+The exact continuous-time bilinear representation is a structural result for the ideal unconstrained core. It is not the same object as the finite-dimensional predictor used inside the online quadratic program. Under zero-order-hold input, the exact discrete lifted map is $z_{c,k+1}=\exp(T_s(A_{0c}+u_kB_{1c}))z_{c,k}$, which depends nonlinearly on $u_k$. The data-driven predictor below is therefore a task-oriented approximation on a prescribed operating domain.
 \end{remark}
 
-\section{Time-to-Go Lateral-Error State}
+\section{Extension to Impact-Time and Impact-Angle Constraints}
+
+\subsection{Terminal Requirements}
+Let $t_f$ be the prescribed impact time and $\gamma_f$ be the prescribed impact angle. The terminal requirements are
+\begin{equation}
+    \|r(t_f)\|\le r_c,\qquad
+    |\gamma(t_f)-\gamma_f|\le \varepsilon_\gamma ,
+    \label{eq:terminal_requirements}
+\end{equation}
+where the current implementation uses $r_c=10$ m and $\varepsilon_\gamma=3^\circ$. The scheduled-time tolerance is one half sampling period, i.e., $\varepsilon_t=T_s/2$.
+
+These constraints are not introduced by the Koopman lift itself; they are geometric requirements of the interception task. The main conceptual difficulty is that $r=0$ is not an equilibrium of \eqref{eq:cartesian_model}. Even if the pursuer reaches the target, $\dot r$ remains nonzero. Thus, terminal stability and recursive-feasibility arguments cannot be copied directly from regulation MPC in the original Cartesian state. A terminal coordinate must encode the remaining time-to-go and lateral impact error.
+
+\subsection{Time-to-Go Lateral-Error State}
 
 Let
 \begin{equation}
@@ -228,10 +234,10 @@ where $A_c$ is the local closed-loop lateral-error matrix. A Lyapunov terminal s
 \end{equation}
 The current implementation uses a polyhedral approximation of the terminal tolerances in \eqref{eq:terminal_origin}, tightened by the residual tube. Equation \eqref{eq:terminal_set} gives the rigorous terminal-set direction for the next theoretical refinement.
 
-\section{Bilinear EDMD Predictor and Sequential Convex MPC}
+\section{Data-Driven Bilinear EDMD Predictor and Sequential Convex MPC}
 
 \subsection{Lifted Dictionary and Identification}
-The implemented lifted dictionary for the normalized time-to-go state and first-order autopilot state is
+The analytic lift $z_c=\psi_c(x_c)$ in Section III explains the structural origin of a bilinear Koopman model for the guidance core. The online controller instead uses a task-oriented lifted state built from the time-to-go terminal-error coordinates, because the terminal constraints are imposed directly on $[\tau/t_f,y/R_s,\theta]^T$. With the first-order autopilot included, the implemented lifted dictionary is
 \begin{align}
     \psi(x_\tau,u_a)=
     [&1,\tau,y,\theta,u_a,\cos\theta,\sin\theta,
@@ -240,12 +246,12 @@ The implemented lifted dictionary for the normalized time-to-go state and first-
     u_a\cos\theta,u_a\sin\theta]^T .
     \label{eq:dictionary}
 \end{align}
-Here $\tau$ and $y$ denote the normalized components in \eqref{eq:xtau}. The output matrix extracts $[\tau/t_f,y/R_s,\theta]^T$ from the lifted state, while $u_a$ is retained to represent actuator lag. From sampled data, the bilinear EDMD predictor is identified as
+For compact notation, $\tau$ and $y$ in \eqref{eq:dictionary} denote the normalized components $\tau/t_f$ and $y/R_s$ from \eqref{eq:xtau}. The output matrix extracts $[\tau/t_f,y/R_s,\theta]^T$ from the lifted state, while $u_a$ is retained to represent actuator lag. From sampled trajectory data, the bilinear EDMD predictor is identified as
 \begin{equation}
     z_{k+1}=A_b z_k+B_0u_k+u_kB_bz_k+w_k ,
     \label{eq:bilinear_predictor}
 \end{equation}
-where $z_k=\psi(x_{\tau,k})$ and $w_k$ is the finite-dimensional prediction residual. The regression matrix is
+where $z_k=\psi(x_{\tau,k},u_{a,k})$ and $w_k$ is the finite-dimensional prediction residual. The regression matrix is
 \begin{equation}
     \Omega_b=
     \begin{bmatrix}
@@ -372,24 +378,25 @@ The stationary-target engagement starts from
     \end{bmatrix}^T{\rm m},\qquad
     \gamma(0)=25^\circ .
 \end{equation}
-The nominal speed is $300$ m/s, $T_s=0.1$ s, $R_s=6000$ m, $A_{\max}=100$ m/s$^2$, $\tau_a=0.10$ s, and the prediction horizon is $N=35$. The prescribed default terminal conditions are $t_f=21.7$ s and $\gamma_f=-2^\circ$. The data set contains 260 training trajectories and 60 test trajectories for the default run. All online optimizations are solved as convex quadratic programs after sequential convexification.
+The nominal speed is $300$ m/s, $T_s=0.1$ s, $R_s=6000$ m, $A_{\max}=100$ m/s$^2$, $\tau_a=0.10$ s, and the prediction horizon is $N=35$. The prescribed default terminal conditions are $t_f=21.7$ s and $\gamma_f=-2^\circ$. The data set contains 260 training trajectories and 60 test trajectories for the default run. The proposed bilinear Koopman-MPC controller and the linear Koopman-MPC baseline are solved as convex quadratic programs after sequential convexification. The NMPC baseline uses the original nonlinear prediction model with an eight-block move-blocking input parameterization and a sequential quadratic programming solver.
 
 \subsection{Prediction Accuracy}
 The exact bilinear lift of the ideal acceleration-controlled core was checked by integrating the lifted and original systems with the same Runge-Kutta scheme for 300 steps. The maximum consistency error was $3.99\times10^{-11}$, confirming the exact continuous-time closure of the core model. The autopilot-augmented predictor is then evaluated through validation-data prediction errors and residual-tube tightening.
 
-Table \ref{tab:prediction} compares one-step linear EDMD, direct 35-step linear EDMD, and the bilinear rolling predictor used by the controller. The bilinear rolling predictor substantially reduces long-horizon normalized errors in the time-to-go and cross-track components compared with the direct linear multi-step predictor.
+Table \ref{tab:prediction} compares one-step linear EDMD, rolling use of the one-step linear EDMD model, direct 35-step linear EDMD, and the bilinear rolling predictor used by the controller. The one-step EDMD model is accurate over one sample but accumulates visible long-horizon error when rolled forward. The bilinear rolling predictor substantially reduces long-horizon normalized errors in the time-to-go and cross-track components compared with both linear multi-step alternatives, while all predictors keep the heading-error component small in this nominal data set.
 
 \begin{table}[!t]
 \caption{Prediction Error on the Test Set}
 \label{tab:prediction}
 \centering
-\begin{tabular}{c c c c}
+\footnotesize
+\begin{tabular}{c c c c c}
 \hline
-State & One-step & Linear 35-step & Bilinear rolling\\
+State & One-step & One-step roll & Linear 35-step & Bilinear roll\\
 \hline
-$\tau/t_f$ & $6.94{\times}10^{-6}$ & $2.28{\times}10^{-2}$ & $3.92{\times}10^{-5}$\\
-$y/R_s$ & $3.04{\times}10^{-6}$ & $9.87{\times}10^{-3}$ & $3.29{\times}10^{-5}$\\
-$\theta$ & $2.35{\times}10^{-9}$ & $9.64{\times}10^{-9}$ & $7.09{\times}10^{-8}$\\
+$\tau/t_f$ & $6.94{\times}10^{-6}$ & $3.03{\times}10^{-2}$ & $2.28{\times}10^{-2}$ & $3.92{\times}10^{-5}$\\
+$y/R_s$ & $3.04{\times}10^{-6}$ & $1.38{\times}10^{-2}$ & $9.87{\times}10^{-3}$ & $3.29{\times}10^{-5}$\\
+$\theta$ & $2.35{\times}10^{-9}$ & $5.02{\times}10^{-8}$ & $9.64{\times}10^{-9}$ & $7.09{\times}10^{-8}$\\
 \hline
 \end{tabular}
 \end{table}
@@ -397,7 +404,7 @@ $\theta$ & $2.35{\times}10^{-9}$ & $9.64{\times}10^{-9}$ & $7.09{\times}10^{-8}$
 \begin{figure}[!t]
 \centering
 \includegraphics[width=3.35in]{KDPC_RSRFG-main/StationaryTargetKoopman/results/prediction_validation.png}
-\caption{Prediction comparison between the nonlinear trajectory, the direct linear multi-step EDMD predictor, and the rolling bilinear Koopman predictor.}
+\caption{Prediction comparison between the nonlinear trajectory, the rolling one-step EDMD predictor, the direct linear multi-step EDMD predictor, and the rolling bilinear Koopman predictor.}
 \label{fig:prediction}
 \end{figure}
 
@@ -425,6 +432,35 @@ Nominal & Yes & 0.00 s & 5.978 m & $0.647^\circ$\\
 \end{figure}
 
 Fig. \ref{fig:closed_loop} shows the closed-loop response. The range decreases to the capture neighborhood at the prescribed terminal time, while the heading converges to the desired impact angle. The commanded and actual accelerations remain within the 100 m/s$^2$ limit. The input-difference penalty suppresses command chattering, and the first-order autopilot makes the applied acceleration continuous.
+
+\subsection{Closed-Loop Baseline Comparison}
+The default scenario was further used to compare the proposed controller with two baselines. The first baseline is a linear Koopman-MPC controller that uses the same cost terms, input bound, heading path constraint, and terminal constraint structure, but replaces the bilinear rolling predictor with the direct multi-step linear EDMD predictor. The second baseline is a move-blocking NMPC controller that predicts the original nonlinear autopilot-augmented plant and optimizes eight piecewise-constant input blocks over the same 35-step horizon. This comparison separates the effect of the bilinear lifted predictor from the effect of constrained receding-horizon optimization itself.
+
+Table \ref{tab:closed_loop_comparison} reports the closed-loop comparison. The linear Koopman-MPC baseline preserves a low computation time and has no QP failures, but it misses the 10 m capture set and reaches a $3.041^\circ$ impact-angle error. The move-blocking NMPC baseline reduces the miss distance relative to linear Koopman-MPC, but it still violates the 10 m capture condition and produces 15 nonlinear-program failures. In contrast, the proposed bilinear Koopman-MPC controller satisfies all terminal requirements with a 5.978 m scheduled miss distance, a $0.647^\circ$ impact-angle error, no QP failures, and an average solve time of 11.70 ms.
+
+\begin{table*}[!t]
+\caption{Closed-Loop Guidance Comparison in the Default Scenario}
+\label{tab:closed_loop_comparison}
+\centering
+\begin{tabular}{c c c c c c c}
+\hline
+Method & Satisfied & Time error [s] & Miss [m] & Angle error [deg] & Failures & Mean solve [ms]\\
+\hline
+Linear Koopman-MPC & No & 0.000 & 49.215 & 3.041 & 0 & 3.06\\
+Bilinear Koopman-MPC & Yes & 0.000 & 5.978 & 0.647 & 0 & 11.70\\
+Move-blocking NMPC & No & 0.000 & 28.417 & 3.023 & 15 & 559.78\\
+\hline
+\end{tabular}
+\end{table*}
+
+\begin{figure*}[!t]
+\centering
+\includegraphics[width=6.85in]{KDPC_RSRFG-main/StationaryTargetKoopman/results/closed_loop_guidance_comparison.png}
+\caption{Closed-loop comparison among linear Koopman-MPC, the proposed bilinear Koopman-MPC controller, and move-blocking NMPC in the default impact-time and impact-angle constrained case.}
+\label{fig:closed_loop_comparison}
+\end{figure*}
+
+Fig. \ref{fig:closed_loop_comparison} shows that the three controllers generate similar early-range reduction, but differ near the scheduled terminal instant. The proposed bilinear Koopman-MPC trajectory enters the capture neighborhood while maintaining the prescribed impact angle. The linear Koopman-MPC and move-blocking NMPC baselines remain outside the 10 m terminal set in this implementation. These results indicate that the bilinear predictor is not only a more accurate validation model, but also materially affects closed-loop terminal performance under the tightened terminal constraints.
 
 \subsection{Additional Nominal Scenario Tests}
 To further examine the terminal-constraint envelope, additional nominal cases were tested by changing either the prescribed impact time or the prescribed impact angle. Table \ref{tab:full_cases} gives two full-data successful cases. Besides the baseline 21.70 s command, the controller also satisfies a slightly delayed 21.75 s command with a 9.794 m miss distance and a $0.530^\circ$ angle error. Both cases satisfy the 10 m capture-radius requirement and have no quadratic-program failures.
@@ -464,6 +500,19 @@ $t_f$ [s] & $\gamma_f$ [deg] & Miss [m] & Angle error [deg]\\
 \end{tabular}
 \end{table}
 
+\begin{figure*}[!t]
+\centering
+\subfloat[Fixed initial condition with varying impact-time and impact-angle commands.]{
+\includegraphics[width=3.35in]{KDPC_RSRFG-main/StationaryTargetKoopman/results/comparison_fixed_initial_vary_constraints.png}}
+\hfil
+\subfloat[Varying initial heading with fixed impact-angle command and adjusted impact time.]{
+\includegraphics[width=3.35in]{KDPC_RSRFG-main/StationaryTargetKoopman/results/comparison_vary_initial_time_fixed_angle.png}}
+\caption{Multi-scenario closed-loop simulations for the proposed bilinear Koopman-MPC guidance law. Each panel group compares the trajectory, range, flight-path angle, and first-order-autopilot lateral acceleration across the corresponding nominal cases.}
+\label{fig:multi_scenario_comparison}
+\end{figure*}
+
+Fig. \ref{fig:multi_scenario_comparison} visualizes these additional nominal simulations. The fixed-initial-condition cases show that changing the requested terminal time and terminal angle changes both the required curvature and the acceleration saturation pattern. The varying-initial-heading cases show that the same controller structure can adapt to moderate initial-heading changes when the terminal time is adjusted consistently with the reachable envelope.
+
 The impact-angle-only cases requested in the preliminary study were also included as nominal flight simulations. In these tests, the terminal time is not prescribed; the controller enforces the terminal angle and cross-track capture condition while using the time-to-go component only as a progress reference. Table \ref{tab:angle_only_nominal} reports the 30$^\circ$ and 45$^\circ$ results. Both cases satisfy the 10 m capture-radius condition and the 3$^\circ$ impact-angle tolerance. The corresponding flight responses are shown in Fig. \ref{fig:angle_only_nominal}.
 
 \begin{table}[!t]
@@ -492,14 +541,16 @@ $\gamma_f$ [deg] & Time [s] & Satisfied & Miss [m] & Angle error [deg]\\
 \end{figure*}
 
 \section{Discussion}
-The results support three conclusions. First, the use of $[\tau/t_f,y/R_s,\theta]^T$ is not merely a numerical convenience. It changes the terminal guidance problem into a form in which the desired impact condition is an origin of the terminal error state. This makes terminal-set, recursive-feasibility, and ISS statements meaningful. Second, the exact continuous-time bilinear Koopman derivation for the ideal core explains why a bilinear predictor is structurally better matched to the guidance dynamics than a purely linear input predictor. The validation results confirm this point over the 35-step prediction horizon even when the learned predictor includes the first-order autopilot state. Third, residual-tube tightening gives a concrete way to account for finite-dimensional prediction error when terminal constraints are enforced through a learned predictor.
+The results support three conclusions. First, the use of $[\tau/t_f,y/R_s,\theta]^T$ is not merely a numerical convenience. It changes the terminal guidance problem into a form in which the desired impact condition is an origin of the terminal error state. This gives a suitable coordinate basis for terminal-set, recursive-feasibility, and ISS-style design statements. Second, the exact continuous-time bilinear Koopman derivation for the ideal core explains why a bilinear predictor is structurally better matched to the guidance dynamics than a purely linear input predictor. The validation results support this point over the 35-step prediction horizon, and the closed-loop comparison shows that the improvement carries into terminal guidance performance. Third, residual-tube tightening gives a concrete way to account for finite-dimensional prediction error when terminal constraints are enforced through a learned predictor.
 
-From a theoretical point of view, the manuscript is complete in three parts: the controlled Koopman generator is well defined under Assumption 1, the Cartesian lifted model gives an exact finite-dimensional continuous-time bilinear representation for the ideal guidance core, and the time-to-go lateral-error state converts the scheduled terminal condition into an origin constraint. The bilinear EDMD predictor, sequential convex quadratic program, first-order-autopilot augmentation, and validation-data tube then provide a complete implementable nominal guidance algorithm. The remaining theoretical gap is narrower but important: the current code uses a tightened polyhedral terminal approximation rather than a computed invariant Lyapunov terminal set. Therefore, the recursive-feasibility and ISS statements should be read as conditional design statements based on \eqref{eq:terminal_set} and \eqref{eq:iss_condition}, not yet as a fully closed formal proof for every initial condition in a specified domain.
+The baseline comparison clarifies what is gained by the proposed structure. Linear Koopman-MPC is computationally efficient, but the direct linear multi-step predictor is not accurate enough to satisfy the tightened terminal capture requirement in the default case. Move-blocking NMPC uses the nonlinear plant model, but its nonlinear program is much slower and experiences solver failures under the tested real-time receding-horizon implementation. The proposed controller occupies the intended middle ground: it retains QP-based online optimization while using a bilinear lifted model that is accurate enough for the terminal constraints in the nominal scenario.
+
+From a theoretical point of view, the manuscript establishes three parts: the controlled Koopman generator is well defined under Assumption 1, the Cartesian lifted model gives an exact finite-dimensional continuous-time bilinear representation for the ideal guidance core, and the time-to-go lateral-error state converts the scheduled terminal condition into an origin constraint. The bilinear EDMD predictor, sequential convex quadratic program, first-order-autopilot augmentation, and validation-data tube then provide an implementable nominal guidance algorithm. The remaining theoretical gap is narrower but important: the current code uses a tightened polyhedral terminal approximation rather than a computed invariant Lyapunov terminal set. Therefore, the recursive-feasibility and ISS statements should be read as conditional design statements based on \eqref{eq:terminal_set} and \eqref{eq:iss_condition}, not yet as a fully closed formal proof for every initial condition in a specified domain.
 
 The current study also has clear boundaries. The model is a nominal stationary-target model with first-order autopilot dynamics; it does not yet include target maneuvers, aerodynamic drag, higher-order autopilot loops, or field-of-view constraints. The terminal screening cases show that the 10 m capture set can be missed even when the impact-angle error is small, especially when the requested impact time or impact angle moves outside the current reachable envelope. Thus, future work should compute $\mathcal X_f(\tau)$ explicitly, enlarge the training and prediction domains, and introduce reachability-based terminal-time selection before moving to disturbance compensation or moving-target extensions.
 
 \section{Conclusion}
-This paper presented a tube-tightened bilinear Koopman-MPC framework for nominal planar guidance with simultaneous impact-time and impact-angle constraints. The theory separates an exact continuous-time bilinear Koopman representation of the ideal guidance core from the finite-dimensional data-driven predictor used for online optimization. A time-to-go lateral-error state makes the prescribed terminal condition a true origin, which provides a suitable basis for terminal-set and ISS-style analysis. The implementation combines bilinear EDMD, first-order autopilot augmentation, sequential convex quadratic programming, terminal residual-tube tightening, interpolation of the lifted initial state, and an input-difference penalty. Simulations with a 10 m capture radius show successful nominal fixed-time interception at 21.70 s and 21.75 s for $\gamma_f=-2^\circ$, with the baseline case achieving a 5.978 m miss distance and a $0.647^\circ$ impact-angle error. Additional screening cases reveal the reachable envelope of the current design. Future work will replace the current terminal polytope approximation with a rigorously computed $\mathcal X_f(\tau)$ and extend the formulation to moving targets, aerodynamic effects, and higher-order autopilot dynamics.
+This paper presented a tube-tightened bilinear Koopman-MPC framework for nominal planar guidance with simultaneous impact-time and impact-angle constraints. The theory separates an exact continuous-time bilinear Koopman representation of the ideal guidance core from the finite-dimensional data-driven predictor used for online optimization. A time-to-go lateral-error state makes the prescribed terminal condition a true origin, which provides a suitable basis for terminal-set and ISS-style analysis. The implementation combines bilinear EDMD, first-order autopilot augmentation, sequential convex quadratic programming, terminal residual-tube tightening, interpolation of the lifted initial state, and an input-difference penalty. In the default 10 m capture-radius case, the proposed controller achieves a 5.978 m miss distance, a $0.647^\circ$ impact-angle error, zero sampling-level impact-time error, and no QP failures. The same case is not satisfied by the linear Koopman-MPC or move-blocking NMPC baselines under the tested implementations. Additional nominal cases show successful fixed-time interception at 21.70 s and 21.75 s for $\gamma_f=-2^\circ$, while the screening cases reveal the reachable envelope of the current design. Future work will replace the current terminal polytope approximation with a rigorously computed $\mathcal X_f(\tau)$ and extend the formulation to moving targets, aerodynamic effects, and higher-order autopilot dynamics.
 
 \balance
 \begin{thebibliography}{99}

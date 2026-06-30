@@ -1,0 +1,7 @@
+case,suffix,satisfied,miss_m,angle_error_deg,mean_solve_ms,max_solve_ms,qp_failures,terminal_steps,tau_slack,y_slack,theta_slack,max_command_mps2
+"impact-cost-only","tune_terminal_ref_impact_cost_only",1,4.28937931,-1.73763602,6.05366595,141.72260000,0,0,5.58272449e-09,1.50380807e-03,1.34931230e-04,93.60000000
+"terminal-4s-impact-cost","tune_terminal_ref_4s_impact_cost",0,62.05522203,2.50921759,44.55154143,820.23360000,0,40,4.77911054e-03,5.42463358e-04,2.07433326e-04,100.00000000
+"terminal-5s-impact-cost","tune_terminal_ref_5s_impact_cost",0,61.96766511,2.55040867,54.06453810,592.70650000,1,50,4.79406018e-03,5.39533776e-04,2.06273250e-04,100.00000000
+"terminal-4s-14b-impact-cost","tune_terminal_ref_4s_14b_impact_cost",0,105.65026585,-3.02794109,56.01399667,821.28530000,0,40,8.43340556e-03,2.61508311e-04,4.87667629e-04,93.60000000
+"terminal-5s-14b-impact-cost","tune_terminal_ref_5s_14b_impact_cost",0,105.57846622,1.47367546,74.57249738,954.02860000,2,50,8.44334192e-03,3.01493904e-04,1.17056156e-04,100.00000000
+"terminal-4s-18b-impact-cost","tune_terminal_ref_4s_18b_impact_cost",0,151.39281898,-0.57158136,70.73027405,1250.69970000,5,40,1.22407809e-02,4.24340269e-04,4.44658021e-04,100.00000000

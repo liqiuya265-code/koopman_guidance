@@ -1,0 +1,3 @@
+case,impact_angle_deg,initial_gamma_deg,nominal_ok,nominal_time_s,nominal_miss_m,nominal_angle_error_deg,stress_ok,stress_time_s,stress_miss_m,stress_angle_error_deg,nominal_qp_failures,stress_qp_failures
+"gamma_f_60_init_-30_broad",60.00000000,-30.00000000,0,37.40000000,59.87044547,-2.92527417,0,37.70000000,58.68914044,-3.72056466,23,6
+"gamma_f_90_init_-30_broad",90.00000000,-30.00000000,0,30.30000000,2309.07195772,-54.73530775,0,31.20000000,2361.57548302,-54.98910294,0,2

@@ -1,0 +1,5 @@
+case,suffix,satisfied,miss_m,angle_error_deg,max_command_mps2,qp_failures,tau_slack,y_slack,theta_slack
+"h50-terminal-y2","tune_h50_terminal_y2",0,93.12485346,-1.33926222,93.60000000,0,7.40460830e-03,1.87054598e-03,1.08222053e-03
+"h50-terminal-y4","tune_h50_terminal_y4",0,148.17645894,-1.20172069,93.60000000,5,1.19209231e-02,1.05610357e-03,3.36506060e-03
+"h50-low-angle","tune_h50_low_angle",0,247.90518064,-0.23909009,93.60000000,14,2.02995708e-02,6.27729904e-03,1.11547744e-02
+"h50-aggressive-input","tune_h50_aggressive_input",0,77.32450900,-0.48121699,97.44000000,2,6.12114928e-03,6.00517349e-04,4.48994468e-04

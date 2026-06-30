@@ -1,0 +1,2 @@
+case,rd,du_max,nominal_ok,nominal_time_s,nominal_miss_m,nominal_angle_error_deg,nominal_max_a,stress_ok,stress_time_s,stress_miss_m,stress_angle_error_deg,stress_max_a,nominal_qp_failures,stress_qp_failures
+"angle-only-no-time-30deg",1.50000000,0.05000000,1,37.00000000,3.04762666,0.10876142,69.82003164,1,38.00000000,4.15005274,0.12137844,70.03446097,0,0

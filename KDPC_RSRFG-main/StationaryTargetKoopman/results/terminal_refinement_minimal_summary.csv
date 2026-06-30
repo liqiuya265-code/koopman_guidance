@@ -1,0 +1,5 @@
+case,suffix,satisfied,miss_m,angle_error_deg,mean_solve_ms,max_solve_ms,qp_failures,terminal_steps,tau_slack,y_slack,theta_slack
+"impact-cost-only","tune_terminal_min_impact_cost_only",0,64.75967896,-1.53597486,5.35918738,24.83870000,0,0,4.61990245e-03,3.81792038e-03,1.85364086e-04
+"terminal-3s-same-cost","tune_terminal_min_3s_same_cost",0,65.62823092,-3.06794503,26.59730476,487.17970000,0,30,4.55863585e-03,3.81792038e-03,1.18586819e-03
+"terminal-4s-same-cost","tune_terminal_min_4s_same_cost",0,66.90897548,-3.08190124,32.02449571,427.36680000,3,40,4.57666113e-03,3.10769234e-03,1.42945075e-03
+"terminal-5s-same-cost","tune_terminal_min_5s_same_cost",0,65.78728508,-3.07544293,40.28671262,424.57320000,11,50,4.59512230e-03,2.85279917e-03,1.31673104e-03
