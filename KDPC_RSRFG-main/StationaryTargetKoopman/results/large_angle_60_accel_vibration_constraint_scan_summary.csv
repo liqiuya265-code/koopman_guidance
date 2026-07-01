@@ -1,0 +1,2 @@
+delta_accel_max,satisfied,miss_m,angle_error_deg,stress_satisfied,stress_miss_m,stress_angle_error_deg,max_accel_mps2,max_delta_accel_mps2,max_command_delta_mps2,stress_max_delta_accel_mps2,qp_failures,stress_qp_failures
+10,0,4143.90486578,-64.71077648,0,4111.93356367,-64.26792644,44.72349066,9.38908870,15.01355448,14.56647936,608,606

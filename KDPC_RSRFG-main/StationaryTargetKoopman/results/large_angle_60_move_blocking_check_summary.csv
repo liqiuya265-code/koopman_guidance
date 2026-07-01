@@ -1,0 +1,2 @@
+case,horizon_s,move_block_size,delta_accel_max,rd,nominal_ok,nominal_time_s,nominal_miss_m,nominal_angle_error_deg,nominal_max_a,nominal_max_delta_a,stress_ok,stress_time_s,stress_miss_m,stress_angle_error_deg,stress_max_a,stress_max_delta_a,nominal_qp_failures,stress_qp_failures
+"large-angle-60deg-move-blocking",10.00000000,5,30.00000000,0.50000000,0,39.50000000,9.07634679,-9.44864918,78.79978405,18.15598254,0,40.70000000,11.47480993,-9.51075314,73.82494810,16.69758501,146,145

@@ -1,0 +1,2 @@
+case,delta_accel_max,nominal_ok,nominal_time_s,nominal_miss_m,nominal_angle_error_deg,nominal_max_a,nominal_max_delta_a,stress_ok,stress_time_s,stress_miss_m,stress_angle_error_deg,stress_max_a,stress_max_delta_a,nominal_qp_failures,stress_qp_failures
+"large-angle-60deg",5.00000000,0,41.40000000,187.61624167,2.18380208,56.90904608,8.34362609,0,42.40000000,193.60364982,1.96873794,54.79406032,10.61804098,36,31

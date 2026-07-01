@@ -1,0 +1,2 @@
+case,delta_accel_max,rd,horizon_s,nominal_ok,nominal_time_s,nominal_miss_m,nominal_angle_error_deg,nominal_max_a,nominal_max_delta_a,stress_ok,stress_time_s,stress_miss_m,stress_angle_error_deg,stress_max_a,stress_max_delta_a,nominal_qp_failures,stress_qp_failures
+"large-angle-60deg-agile-h50",30.00000000,0.20000000,5.00000000,0,42.60000000,11.87989598,-0.28496892,93.59987854,28.07566733,0,43.70000000,13.45782934,-0.44666048,93.58374504,23.76362513,121,128

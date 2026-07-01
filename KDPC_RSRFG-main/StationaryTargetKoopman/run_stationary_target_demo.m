@@ -1,10 +1,14 @@
 %% Stationary-target Koopman guidance: theory-consistent numerical validation
 if ~exist('skipClearOverride','var') || ~skipClearOverride
     clearvars -except impactTimeOverride impactGammaDegOverride ...
-        angleOnlyModeOverride initialGammaDegOverride resultSuffixOverride ...
+        angleOnlyModeOverride initialGammaDegOverride ...
+        initialPositionMetersOverride initialPositionOverride ...
+        initialAutopilotOverride resultSuffixOverride ...
         nStepsOverride nTrainTrajOverride nTestTrajOverride ...
         horizonOverride qxOverride qterminalOverride rbarScaleOverride ...
-        rdOverride duMaxOverride q0ScaleOverride xiPenaltyOverride slackPenaltyOverride ...
+        rdOverride duMaxOverride deltaAccelMaxOverride accelRateMaxOverride ...
+        moveBlockSizeOverride ...
+        q0ScaleOverride xiPenaltyOverride slackPenaltyOverride ...
         seqIterationsOverride maxTighteningFractionOverride ...
         enableAdaptiveOverride alphaBoundsOverride betaBoundsOverride ...
         enableTwoStageCostOverride twoStageWindowOverride ...
@@ -15,6 +19,8 @@ if ~exist('skipClearOverride','var') || ~skipClearOverride
         angleOnlyMaxTimeOverride gammaMaxDegOverride ...
         trainingDataModeOverride angleStateModeOverride ...
         angleOnlyTerminalTauOverride angleOnlyZeroTauRefOverride ...
+        enableYReferenceShapeOverride yRefAmplitudeOverride ...
+        yRefSignOverride yRefTauScaleOverride enableJointReferenceOverride ...
         fovMaxDegOverride fovMinRangeOverride disableFovOverride ...
         skipControllerComparisonOverride;
 end
@@ -168,6 +174,9 @@ ctrl.twoStageWindow=5.0;
 ctrl.Rbar=0.06*eye(N);
 ctrl.Rd=1.5;
 ctrl.duMax=inf;
+ctrl.deltaAccelMax=inf;
+ctrl.amax=p.amax;
+ctrl.moveBlockSize=1;
 ctrl.Q0=0.02*eye(nz);
 ctrl.lambda=8e4;
 if exist('seqIterationsOverride','var'), ctrl.seqIterations=seqIterationsOverride; end
@@ -186,6 +195,15 @@ if exist('twoStageWindowOverride','var'), ctrl.twoStageWindow=twoStageWindowOver
 if exist('rbarScaleOverride','var'), ctrl.Rbar=rbarScaleOverride*eye(N); end
 if exist('rdOverride','var'), ctrl.Rd=rdOverride; end
 if exist('duMaxOverride','var'), ctrl.duMax=duMaxOverride; end
+if exist('deltaAccelMaxOverride','var')
+    ctrl.deltaAccelMax=deltaAccelMaxOverride;
+end
+if exist('accelRateMaxOverride','var')
+    ctrl.deltaAccelMax=accelRateMaxOverride;
+end
+if exist('moveBlockSizeOverride','var')
+    ctrl.moveBlockSize=moveBlockSizeOverride;
+end
 if exist('q0ScaleOverride','var'), ctrl.Q0=q0ScaleOverride*eye(nz); end
 if exist('xiPenaltyOverride','var'), ctrl.lambda=xiPenaltyOverride; end
 ctrl.gammaMax=deg2rad(85);
@@ -199,11 +217,31 @@ ctrl.Ts=p.Ts;
 ctrl.angleStateMode=p.angleStateMode;
 ctrl.angleOnlyTerminalTau=false;
 ctrl.angleOnlyZeroTauRef=false;
+ctrl.enableYReferenceShape=false;
+ctrl.enableJointReference=false;
+ctrl.yRefAmplitude=0;
+ctrl.yRefSign=1;
+ctrl.yRefTauScale=0.6;
 if exist('angleOnlyTerminalTauOverride','var')
     ctrl.angleOnlyTerminalTau=angleOnlyTerminalTauOverride;
 end
 if exist('angleOnlyZeroTauRefOverride','var')
     ctrl.angleOnlyZeroTauRef=angleOnlyZeroTauRefOverride;
+end
+if exist('enableYReferenceShapeOverride','var')
+    ctrl.enableYReferenceShape=enableYReferenceShapeOverride;
+end
+if exist('enableJointReferenceOverride','var')
+    ctrl.enableJointReference=enableJointReferenceOverride;
+end
+if exist('yRefAmplitudeOverride','var')
+    ctrl.yRefAmplitude=yRefAmplitudeOverride;
+end
+if exist('yRefSignOverride','var')
+    ctrl.yRefSign=yRefSignOverride;
+end
+if exist('yRefTauScaleOverride','var')
+    ctrl.yRefTauScale=yRefTauScaleOverride;
 end
 ctrl.Vref=p.Vnom;
 ctrl.Rscale=p.Rscale;
@@ -289,7 +327,23 @@ end
 
 initialGammaDeg=-30;
 if exist('initialGammaDegOverride','var'), initialGammaDeg=initialGammaDegOverride; end
-initial=[10000/p.Rscale;0/p.Rscale;deg2rad(initialGammaDeg);0];
+initialPosition_m=[10000;0];
+if exist('initialPositionMetersOverride','var')
+    initialPosition_m=initialPositionMetersOverride(:);
+elseif exist('initialPositionOverride','var')
+    initialPosition_m=p.Rscale*initialPositionOverride(:);
+end
+if numel(initialPosition_m)~=2
+    error('Initial position override must be a 2-element vector [rx; ry].');
+end
+initialAutopilot=0;
+if exist('initialAutopilotOverride','var')
+    initialAutopilot=initialAutopilotOverride;
+end
+p.initialPosition_m=initialPosition_m;
+p.initialGammaDeg=initialGammaDeg;
+p.initialAutopilot=initialAutopilot;
+initial=[initialPosition_m/p.Rscale;deg2rad(initialGammaDeg);initialAutopilot];
 nominal=run_closed_loop(initial,p,ctrl,false,angleOnlyMode);
 stress=run_closed_loop(initial,p,ctrl,true,angleOnlyMode);
 
@@ -359,25 +413,27 @@ xlabel('prediction step'); ylabel('theta [deg]'); grid on;
 exportgraphics(fig1,result_file(resultsDir,'prediction_validation',resultSuffix,'png'),'Resolution',180);
 
 %% Closed-loop figures
+nominalPlot=truncate_to_impact(nominal);
+stressPlot=truncate_to_impact(stress);
 fig2=figure('Color','w','Position',[100 80 980 820]);
-subplot(4,1,1); plot(p.Rscale*nominal.x(1,:),p.Rscale*nominal.x(2,:), ...
+subplot(4,1,1); plot(p.Rscale*nominalPlot.x(1,:),p.Rscale*nominalPlot.x(2,:), ...
     'b','LineWidth',1.7); hold on;
-plot(p.Rscale*stress.x(1,:),p.Rscale*stress.x(2,:),'r--','LineWidth',1.5);
+plot(p.Rscale*stressPlot.x(1,:),p.Rscale*stressPlot.x(2,:),'r--','LineWidth',1.5);
 refLine=impact_reference_path(p);
 plot(refLine(1,:),refLine(2,:),'k:','LineWidth',1.1);
 plot(0,0,'ko','MarkerFaceColor','k'); axis equal; grid on;
 xlabel('r_x [m]'); ylabel('r_y [m]'); legend('nominal','stress','time-angle reference','target');
-subplot(4,1,2); plot(nominal.time_s,nominal.range_m,'b','LineWidth',1.6); hold on;
-plot(stress.time_s,stress.range_m,'r--','LineWidth',1.5);
+subplot(4,1,2); plot(nominalPlot.time_s,nominalPlot.range_m,'b','LineWidth',1.6); hold on;
+plot(stressPlot.time_s,stressPlot.range_m,'r--','LineWidth',1.5);
 yline(p.captureRadius,'k:'); xline(p.impactTime,'k-.'); ylabel('range [m]'); grid on;
-subplot(4,1,3); plot(nominal.time_s,rad2deg(nominal.x(3,:)),'b','LineWidth',1.5); hold on;
-plot(stress.time_s,rad2deg(stress.x(3,:)),'r--','LineWidth',1.4);
+subplot(4,1,3); plot(nominalPlot.time_s,rad2deg(nominalPlot.x(3,:)),'b','LineWidth',1.5); hold on;
+plot(stressPlot.time_s,rad2deg(stressPlot.x(3,:)),'r--','LineWidth',1.4);
 yline(rad2deg(p.impactGamma),'k:'); xline(p.impactTime,'k-.');
 ylabel('gamma [deg]'); grid on;
-subplot(4,1,4); plot(nominal.time_s(1:end-1),p.amax*nominal.uActual, ...
+subplot(4,1,4); plot(nominalPlot.time_s(1:end-1),p.amax*nominalPlot.uActual, ...
     'b','LineWidth',1.5); hold on;
-plot(stress.time_s(1:end-1),p.amax*stress.uActual,'r--','LineWidth',1.3);
-stairs(nominal.time_s(1:end-1),p.amax*nominal.u,'Color',[0.2 0.55 1], ...
+plot(stressPlot.time_s(1:end-1),p.amax*stressPlot.uActual,'r--','LineWidth',1.3);
+stairs(nominalPlot.time_s(1:end-1),p.amax*nominalPlot.u,'Color',[0.2 0.55 1], ...
     'LineStyle',':','LineWidth',0.9);
 yline(p.amax,'k:'); yline(-p.amax,'k:'); xlabel('time [s]');
 ylabel('A [m/s^2]'); legend('nominal actual','stress actual','nominal command');
@@ -678,15 +734,7 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.impactHeading_deg=rad2deg(out.x(3,impactIndex));
     out.impactHeadingError_deg=rad2deg(wrap_angle( ...
         out.x(3,impactIndex)-p.impactGamma));
-    if angleOnlyMode
-        out.impactSatisfied=out.impactRange_m<=p.captureRadius && ...
-            abs(deg2rad(out.impactHeadingError_deg))<=p.impactAngleTolerance;
-    else
-        out.impactSatisfied= ...
-            abs(out.impactTimeError_s)<=p.impactTimeTolerance && ...
-            out.impactRange_m<=p.captureRadius && ...
-            abs(deg2rad(out.impactHeadingError_deg))<=p.impactAngleTolerance;
-    end
+    out.impactSatisfied=out.impactRange_m<=p.captureRadius;
     out.captured=out.impactSatisfied;
     out.finalRange_m=out.range_m(end);
     out.qpFailures=sum(out.exitflags<=0);
@@ -701,6 +749,8 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.metrics.finalHeading_deg=rad2deg(out.x(3,end));
     out.metrics.maxCommand_mps2=max(abs(out.u))*p.amax;
     out.metrics.maxAcceleration_mps2=max(abs(out.uActual))*p.amax;
+    out.metrics.maxCommandDelta_mps2=max(abs(diff([0,out.u])))*p.amax;
+    out.metrics.maxAccelerationDelta_mps2=max(abs(diff([0,out.uActual])))*p.amax;
     out.metrics.qpFailures=out.qpFailures;
     out.metrics.terminalRefinementSteps=sum(out.terminalRefinementUsed);
     out.metrics.meanSolveTime_ms=1000*mean(out.solveTime_s);
@@ -726,6 +776,27 @@ function out=run_closed_loop(initial,p,c,stress,angleOnlyMode)
     out.metrics.maxTerminalSlack=max(out.terminalSlack,[],2);
     out.metrics.finalAlphaHat=out.alphaHat(end);
     out.metrics.finalBetaHat=out.betaHat(end);
+end
+
+function out=truncate_to_impact(out)
+    idx=max(1,min(out.impactIndex,numel(out.time_s)));
+    out.x=out.x(:,1:idx);
+    out.time_s=out.time_s(1:idx);
+    out.range_m=out.range_m(1:idx);
+    out.lookAngle_rad=out.lookAngle_rad(1:idx);
+    out.lookAngle_deg=out.lookAngle_deg(1:idx);
+    uIdx=max(0,idx-1);
+    out.u=out.u(1:uIdx);
+    out.uActual=out.uActual(1:uIdx);
+    out.xi=out.xi(1:uIdx);
+    out.predictionError=out.predictionError(1:uIdx);
+    out.exitflags=out.exitflags(1:uIdx);
+    out.solveTime_s=out.solveTime_s(1:uIdx);
+    out.terminalRefinementUsed=out.terminalRefinementUsed(1:uIdx);
+    out.terminalSlack=out.terminalSlack(:,1:uIdx);
+    out.alphaHat=out.alphaHat(1:idx);
+    out.betaHat=out.betaHat(1:idx);
+    out.impactIndex=idx;
 end
 
 function active=terminal_refinement_active(c,k,angleOnlyMode)
@@ -820,7 +891,12 @@ function [cineq,ceq]=nmpc_constraints(v,xMeasured,p,c,k)
         for h=1:c.N
             tauRef=max(abs(xRef(1,h)),c.fovMinRange/(c.Vref*c.impactTime));
             yToLos=c.Rscale/(c.Vref*c.impactTime*tauRef);
-            sigmaApprox=Xerr(3,h)-yToLos*Xerr(2,h);
+            if strcmp(c.angleStateMode,'sincos')
+                thetaApprox=atan2(Xerr(3,h),Xerr(4,h));
+            else
+                thetaApprox=Xerr(3,h);
+            end
+            sigmaApprox=thetaApprox-yToLos*Xerr(2,h);
             cineq=[cineq;sigmaApprox-c.fovMax;-sigmaApprox-c.fovMax];
         end
     end
@@ -1020,17 +1096,21 @@ end
 
 function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
     zMeasured,delta,c,k,uPrev)
-    offsetX=c.Cbar*offsetZ; mapX=c.Cbar*mapZ;
+    [Umap,nControl]=control_block_map(c);
+    baseMap=blkdiag(Umap,1);
+    offsetX=c.Cbar*offsetZ; mapX=c.Cbar*mapZ*baseMap;
     xRef=impact_reference_stack(k,c,zMeasured);
     Qcost=prediction_cost_matrix(c,k);
-    nBase=c.N+1; nSlack=c.nSlack; nVar=nBase+nSlack;
+    nBase=nControl+1; nSlack=c.nSlack; nVar=nBase+nSlack;
     H=zeros(nVar); f=zeros(nVar,1);
     H(1:nBase,1:nBase)=2*(mapX'*Qcost*mapX);
     f(1:nBase)=2*(mapX'*Qcost*(offsetX-xRef));
-    H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*c.Rbar;
+    H(1:nControl,1:nControl)=H(1:nControl,1:nControl)+ ...
+        2*(Umap'*c.Rbar*Umap);
     [Hd,fd]=delta_u_penalty(c.N,c.Rd,uPrev);
-    H(1:c.N,1:c.N)=H(1:c.N,1:c.N)+2*Hd;
-    f(1:c.N)=f(1:c.N)+2*fd;
+    H(1:nControl,1:nControl)=H(1:nControl,1:nControl)+ ...
+        2*(Umap'*Hd*Umap);
+    f(1:nControl)=f(1:nControl)+2*(Umap'*fd);
     H(nBase,nBase)=H(nBase,nBase)+2*(delta'*c.Q0*delta+c.lambda*(delta'*delta));
     f(nBase)=f(nBase)+2*delta'*c.Q0*zMeasured;
     H(nBase+1:end,nBase+1:end)=H(nBase+1:end,nBase+1:end)+ ...
@@ -1052,17 +1132,36 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
             tauRef=max(abs(xRefMat(1,h)),c.fovMinRange/(c.Vref*c.impactTime));
             yToLos=c.Rscale/(c.Vref*c.impactTime*tauRef);
             idx=(h-1)*c.nx+(1:c.nx);
-            fovRow=mapX(idx(3),:)-yToLos*mapX(idx(2),:);
-            fovOff=offsetX(idx(3))-yToLos*offsetX(idx(2));
+            if strcmp(c.angleStateMode,'sincos')
+                sin0=offsetX(idx(3));
+                cos0=offsetX(idx(4));
+                normSq=max(sin0^2+cos0^2,1e-6);
+                theta0=atan2(sin0,cos0);
+                dThetaDsin=cos0/normSq;
+                dThetaDcos=-sin0/normSq;
+                fovRow=dThetaDsin*mapX(idx(3),:)+ ...
+                    dThetaDcos*mapX(idx(4),:)-yToLos*mapX(idx(2),:);
+                fovOff=theta0-yToLos*offsetX(idx(2));
+            else
+                fovRow=mapX(idx(3),:)-yToLos*mapX(idx(2),:);
+                fovOff=offsetX(idx(3))-yToLos*offsetX(idx(2));
+            end
             Aineq=[Aineq;fovRow,zeros(1,nSlack); ...
                 -fovRow,zeros(1,nSlack)];
             bineq=[bineq;c.fovMax-fovOff;c.fovMax+fovOff];
         end
     end
     if isfield(c,'duMax') && isfinite(c.duMax)
-        [Adu,bdu]=delta_u_hard_constraints(c.N,c.duMax,uPrev,nVar);
+        [Adu,bdu]=delta_u_hard_constraints( ...
+            c.N,c.duMax,uPrev,nVar,Umap,nControl);
         Aineq=[Aineq;Adu];
         bineq=[bineq;bdu];
+    end
+    if isfield(c,'deltaAccelMax') && isfinite(c.deltaAccelMax)
+        [Aacc,bacc]=delta_accel_hard_constraints( ...
+            c.N,c.deltaAccelMax,uPrev,c.amax,nVar,Umap,nControl);
+        Aineq=[Aineq;Aacc];
+        bineq=[bineq;bacc];
     end
     if c.angleOnlyMode
         hImpact=c.N;
@@ -1106,24 +1205,47 @@ function [U,xi,terminalSlack,exitflag]=solve_kdpc_qp(offsetZ,mapZ, ...
             end
         end
     end
-    lb=[-ones(c.N,1);0;zeros(nSlack,1)];
-    ub=[ones(c.N,1);1;inf(nSlack,1)];
+    lb=[-ones(nControl,1);0;zeros(nSlack,1)];
+    ub=[ones(nControl,1);1;inf(nSlack,1)];
     [sol,~,exitflag]=quadprog(H,f,Aineq,bineq,[],[],lb,ub,[],c.options);
-    if exitflag<=0 || isempty(sol), sol=[zeros(c.N,1);0;zeros(nSlack,1)]; end
-    U=sol(1:c.N);
+    if exitflag<=0 || isempty(sol), sol=zeros(nVar,1); end
+    U=Umap*sol(1:nControl);
     xi=sol(nBase);
     terminalSlack=sol(nBase+1:end);
 end
 
-function [Adu,bdu]=delta_u_hard_constraints(N,duMax,uPrev,nVar)
+function [Umap,nControl]=control_block_map(c)
+    blockSize=1;
+    if isfield(c,'moveBlockSize')
+        blockSize=max(1,round(c.moveBlockSize));
+    end
+    nControl=ceil(c.N/blockSize);
+    Umap=zeros(c.N,nControl);
+    for j=1:nControl
+        first=(j-1)*blockSize+1;
+        last=min(j*blockSize,c.N);
+        Umap(first:last,j)=1;
+    end
+end
+
+function [Adu,bdu]=delta_u_hard_constraints( ...
+    N,duMax,uPrev,nVar,Umap,nControl)
     D=eye(N);
     for i=2:N
         D(i,i-1)=-1;
     end
     offset=zeros(N,1);
     offset(1)=uPrev;
-    Adu=[D,zeros(N,nVar-N);-D,zeros(N,nVar-N)];
+    Dblock=D*Umap;
+    Adu=[Dblock,zeros(N,nVar-nControl);-Dblock,zeros(N,nVar-nControl)];
     bdu=[duMax+offset;duMax-offset];
+end
+
+function [Aacc,bacc]=delta_accel_hard_constraints( ...
+    N,deltaAccelMax,uPrev,amax,nVar,Umap,nControl)
+    duMax=max(deltaAccelMax,0)/amax;
+    [Aacc,bacc]=delta_u_hard_constraints( ...
+        N,duMax,uPrev,nVar,Umap,nControl);
 end
 
 function [Hdu,fdu]=delta_u_penalty(N,Rd,uPrev)
@@ -1144,15 +1266,17 @@ function xRef=impact_reference_stack(k,c,zMeasured)
         t=(k-1+h)*c.Ts;
         idx=(h-1)*c.nx+(1:c.nx);
         if c.angleOnlyMode
+            tauProgress=max(xNow(1)-h*c.Ts/c.impactTime,0);
             if isfield(c,'angleOnlyZeroTauRef') && c.angleOnlyZeroTauRef
                 tauRef=0;
             else
-                tauRef=max(xNow(1)-h*c.Ts/c.impactTime,0);
+                tauRef=tauProgress;
             end
+            [yRef,thetaRef]=angle_only_joint_reference(tauProgress,c);
             if strcmp(c.angleStateMode,'sincos')
-                xRef(idx)=[tauRef;0;0;1];
+                xRef(idx)=[tauRef;yRef;sin(thetaRef);cos(thetaRef)];
             else
-                xRef(idx)=[tauRef;0;0];
+                xRef(idx)=[tauRef;yRef;thetaRef];
             end
         else
             tgo=max(c.impactTime-t,0);
@@ -1162,6 +1286,26 @@ function xRef=impact_reference_stack(k,c,zMeasured)
                 xRef(idx)=[tgo/c.impactTime;0;0];
             end
         end
+    end
+end
+
+function [yRef,thetaRef]=angle_only_joint_reference(tauRef,c)
+    yRef=0;
+    thetaRef=0;
+    if ~isfield(c,'enableYReferenceShape') || ~c.enableYReferenceShape
+        return;
+    end
+    tauScale=max(c.yRefTauScale,1e-6);
+    phase=min(max(tauRef/tauScale,0),1);
+    yRef=c.yRefSign*c.yRefAmplitude*sin(pi*phase);
+    if isfield(c,'enableJointReference') && c.enableJointReference
+        if tauRef/tauScale>=0 && tauRef/tauScale<=1
+            dyDtau=c.yRefSign*c.yRefAmplitude*pi/tauScale*cos(pi*phase);
+        else
+            dyDtau=0;
+        end
+        dyDs=(c.Rscale/(c.Vref*c.impactTime))*dyDtau;
+        thetaRef=atan(dyDs);
     end
 end
 
@@ -1293,6 +1437,8 @@ function write_case(fid,name,m)
     fprintf(fid,'%s_final_heading_deg=%.8f\n',name,m.finalHeading_deg);
     fprintf(fid,'%s_max_command_mps2=%.8f\n',name,m.maxCommand_mps2);
     fprintf(fid,'%s_max_acceleration_mps2=%.8f\n',name,m.maxAcceleration_mps2);
+    fprintf(fid,'%s_max_command_delta_mps2=%.8f\n',name,m.maxCommandDelta_mps2);
+    fprintf(fid,'%s_max_acceleration_delta_mps2=%.8f\n',name,m.maxAccelerationDelta_mps2);
     fprintf(fid,'%s_qp_failures=%d\n',name,m.qpFailures);
     fprintf(fid,'%s_mean_solve_time_ms=%.8f\n',name,m.meanSolveTime_ms);
     fprintf(fid,'%s_max_solve_time_ms=%.8f\n',name,m.maxSolveTime_ms);
