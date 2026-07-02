@@ -1,0 +1,2 @@
+captured,impact_time_s,min_range_m,final_range_m,max_command_mps2,capture_radius_m,optimizer_failures,mean_solve_ms,max_solve_ms,max_lift_consistency_error
+1,20.70000000,2.66579474,2.66579474,55.85372334,5.00000000,33,495.71798095,2286.92760000,1.251561067698e-09

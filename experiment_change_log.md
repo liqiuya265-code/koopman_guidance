@@ -1366,3 +1366,150 @@ stress angle error = -2.66 deg
 结论：
 
 修正后 FOV 约束可以求解，但当前 `FOV = 60 deg` 会明显收窄可行机动空间，因此尚未命中目标。后续可先用更宽的 FOV，例如 `80 deg`，验证轨迹可行性后再逐步收紧。
+
+## 24. GPOPS-II offline optimal-control comparison plan and scripts
+
+Date: 2026-07-02
+
+User request:
+Compare both Koopman-MPC guidance laws in the manuscript against guidance
+solutions obtained from GPOPS.
+
+Design decision:
+Use GPOPS-II as an offline optimal-control benchmark, not as an online
+receding-horizon guidance law.  The comparison is split into two matched
+problems:
+
+1. Basic guidance comparison:
+   - Koopman side: `run_exact_bilinear_koopman_mpc_precision_guidance.m`.
+   - GPOPS side: fixed-final-time minimum-control-energy interception.
+   - Model: ideal three-state stationary-target guidance core
+     `[r_x, r_y, gamma]`.
+   - Terminal constraints: `r_x(tf)=0`, `r_y(tf)=0`.
+   - Final time: fixed to the Koopman-MPC closest-approach/capture time.
+
+2. Impact-angle guidance comparison:
+   - Koopman side: current angle-only run
+     `stationary_target_results_angle_no_time_dA_5_main.mat`.
+   - GPOPS side: fixed-final-time minimum-control-energy interception with
+     terminal impact-angle constraint.
+   - Model: four-state plant `[r_x, r_y, gamma, u_a]` with first-order
+     autopilot lag.
+   - Terminal constraints: `r_x(tf)=0`, `r_y(tf)=0`,
+     `gamma(tf)=gamma_f`.
+   - Final time: fixed to the Koopman-MPC actual impact/capture time.
+
+Added scripts:
+
+```text
+KDPC_RSRFG-main/StationaryTargetKoopman/run_gpops_basic_guidance_comparison.m
+KDPC_RSRFG-main/StationaryTargetKoopman/run_gpops_impact_angle_guidance_comparison.m
+```
+
+Expected outputs when GPOPS-II is installed:
+
+```text
+results/gpops_basic_guidance_comparison_summary.csv
+results/gpops_basic_guidance_comparison.png
+results/gpops_basic_guidance_comparison.mat
+results/gpops_impact_angle_guidance_comparison_summary.csv
+results/gpops_impact_angle_guidance_comparison.png
+results/gpops_impact_angle_guidance_comparison.mat
+```
+
+Current environment note:
+No `gpops2` executable/function was found on the MATLAB path in the current
+workspace.  Therefore the scripts include a path check and write a status file
+instead of failing if GPOPS-II is not installed.
+
+Follow-up correction:
+The impact-angle comparison plot now converts the Koopman trajectory back to
+meters using `problem.Rscale`, matching the existing plotting convention in
+`run_stationary_target_demo.m`.
+
+## 25. GPOPS-II path setup and NLP solver adjustment
+
+Date: 2026-07-02
+
+User placed the downloaded GPOPS-II folder in the workspace:
+
+```text
+C:\Users\qiuya\Documents\koopman_guidance\gpops2\gpops2
+```
+
+Installed/configured by running:
+
+```matlab
+cd('C:\Users\qiuya\Documents\koopman_guidance\gpops2\gpops2')
+gpopsMatlabPathSetup
+savepath
+```
+
+Verification in a fresh MATLAB process:
+
+```text
+which_gpops2 = C:\Users\qiuya\Documents\koopman_guidance\gpops2\gpops2\lib\gpopsCommon\gpops2.m
+exist_gpops2 = 2
+```
+
+First solve test:
+`run_gpops_basic_guidance_comparison.m` successfully entered GPOPS-II, but the
+IPOPT MEX failed at initialization:
+
+```text
+ipopt.mexw64 invalid: DLL initialization routine failed
+```
+
+This indicates that the GPOPS path itself is installed, but the bundled 2013
+IPOPT binary is not compatible with or not fully supported by the current
+MATLAB R2025b/runtime environment.  SNOPT was found on the MATLAB path:
+
+```text
+snoptcmex.mexw64
+```
+
+Therefore the two GPOPS comparison scripts were changed from
+`setup.nlp.solver='ipopt'` to `setup.nlp.solver='snopt'`.
+
+Basic comparison verification:
+`run_gpops_basic_guidance_comparison.m` completed successfully with SNOPT and
+generated:
+
+```text
+results/gpops_basic_guidance_comparison_summary.csv
+results/gpops_basic_guidance_comparison.png
+results/gpops_basic_guidance_comparison.mat
+```
+
+Representative result:
+
+```text
+Koopman-MPC miss = 2.6658 m, energy = 1.7587e+03
+GPOPS miss       = 0.0000 m, energy = 4.8124e+02
+```
+
+Impact-angle script compatibility fix:
+The saved stationary-target parameter struct uses `p.Vnom` rather than `p.V`.
+Updated `run_gpops_impact_angle_guidance_comparison.m` accordingly.
+
+Impact-angle comparison verification:
+`run_gpops_impact_angle_guidance_comparison.m` completed successfully with
+SNOPT and generated:
+
+```text
+results/gpops_impact_angle_guidance_comparison_summary.csv
+results/gpops_impact_angle_guidance_comparison.png
+results/gpops_impact_angle_guidance_comparison.mat
+```
+
+Representative result:
+
+```text
+Koopman-MPC miss = 3.0476 m, angle error = 0.1088 deg, energy = 1.6676e+04
+GPOPS miss       = 0.0000 m, angle error = 0.0000 deg, energy = 5.3126e+03
+```
+
+Current conclusion:
+GPOPS-II is installed and callable from MATLAB after path setup.  The bundled
+IPOPT binary is not usable in the current MATLAB R2025b environment, but SNOPT
+works and both GPOPS comparison scripts now run to completion.

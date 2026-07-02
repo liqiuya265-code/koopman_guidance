@@ -1,0 +1,3 @@
+method,captured,impact_time_s,miss_m,max_command_mps2,rms_command_mps2,control_energy,solver_failures
+Koopman-MPC,1,20.70000000,2.66579474,55.85372334,9.62824823,1.758711548924e+03,33
+GPOPS,1,20.70000000,0.00000000,7.17968677,4.79956396,4.812381193306e+02,0
